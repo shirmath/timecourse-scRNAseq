@@ -239,6 +239,7 @@ arma::vec A_grad(
     const arma::vec & A_vec, // value of A at which to evaluate gradient
     const Rcpp::List & data  , // List(Y, X, O, w)
     const Rcpp::List & params,
+    const bool & elbo_2 = false,
     const double scale = 1) {
   
   // Conversion from R to arma data structures
@@ -255,30 +256,40 @@ arma::vec A_grad(
   const arma::mat mu = Rcpp::as<arma::mat>(params["mu"]);     // true mean (p)
   const auto init_M = Rcpp::as<arma::cube>(params["M"]);     // variational approximation means (m,J,n)
   const auto init_S = Rcpp::as<arma::cube>(params["S"]);  // variational approximation variances (m,J,n)
-  const auto Sigma_Z = Rcpp::as<arma::mat>(params["Sigma_Z"]); // covinv for particular VAR instance (p,p) 
-  
-  // set up useful data structures and base quantities
-  arma::mat Sigma = Sigma_Z - A * Sigma_Z * trans(A);
-  arma::mat Omega_Z = inv(Sigma_Z);
-  arma::mat Omega = inv(Sigma);
-  arma::mat Omega_A_Sigma_Z = Omega * A * Sigma_Z;
-  
-  arma::mat t2 = arma::mat(J, J, fill::zeros);
-  arma::mat quad_term = arma::mat(J, J, fill::zeros);
-  
-  
-  
-  for (int t = 0; t < m-1; ++t) {
-    quad_term = init_M.row_as_mat(t+1) - init_M.row_as_mat(t) * trans(A);
-    t2 = t2 + trans(quad_term) * (quad_term * Omega_A_Sigma_Z - init_M.row_as_mat(t));
-    t2 = t2 + diagmat(sum(init_S.row_as_mat(t+1), 0)) * Omega_A_Sigma_Z + A * diagmat(sum(init_S.row_as_mat(t), 0)) * (eye(J, J) + trans(A) * Omega_A_Sigma_Z);
-  }
-  
-  
-  //compute gradient
   arma::mat grad = arma::mat(J, J);
   
-  grad = n * (m-1) * Omega_A_Sigma_Z - Omega * t2;
+  if (elbo_2) {
+    const auto Sigma = Rcpp::as<arma::mat>(params["Sigma"]); // covinv for VAR process (p,p)
+    arma::mat t1 = arma::mat(J,J, fill::zeros);
+    
+    for (int t=0; t < m-1; t++) {
+      t1 = t1 + trans(init_M.row_as_mat(t+1)) * init_M.row_as_mat(t);
+      t1 = t1 - A * (trans(init_M.row_as_mat(t)) * init_M.row_as_mat(t) + diagmat(sum(init_S.row_as_mat(t), 0)));
+    }
+    
+    grad = inv(Sigma) * t1;
+    
+  } else {
+    const auto Sigma_Z = Rcpp::as<arma::mat>(params["Sigma_Z"]); // covinv for particular VAR instance (p,p) 
+    
+    // set up useful data structures and base quantities
+    arma::mat Sigma = Sigma_Z - A * Sigma_Z * trans(A);
+    arma::mat Omega_Z = inv(Sigma_Z);
+    arma::mat Omega = inv(Sigma);
+    arma::mat Omega_A_Sigma_Z = Omega * A * Sigma_Z;
+    
+    arma::mat t2 = arma::mat(J, J, fill::zeros);
+    arma::mat quad_term = arma::mat(J, J, fill::zeros);
+    
+    for (int t = 0; t < m-1; ++t) {
+      quad_term = init_M.row_as_mat(t+1) - init_M.row_as_mat(t) * trans(A);
+      t2 = t2 + trans(quad_term) * (quad_term * Omega_A_Sigma_Z - init_M.row_as_mat(t));
+      t2 = t2 + diagmat(sum(init_S.row_as_mat(t+1), 0)) * Omega_A_Sigma_Z + A * diagmat(sum(init_S.row_as_mat(t), 0)) * (eye(J, J) + trans(A) * Omega_A_Sigma_Z);
+    }
+    
+    //compute gradient
+    grad = n * (m-1) * Omega_A_Sigma_Z - Omega * t2;
+  }
   
   return (scale*vectorise(grad));
 }

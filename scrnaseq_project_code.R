@@ -89,6 +89,8 @@ for (i in 1:nsim) {
                          init_S = rep(1, m*J*n),
                          optim_method = "nloptr",
                          max.iter = 100,
+                         penalty = TRUE,
+                         lambda = 0.15,
                          skip_coords = skip_params)
   
   sim_mu_results["vi", ,paste0(i)] <- vi_est$mu

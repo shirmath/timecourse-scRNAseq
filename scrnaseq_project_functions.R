@@ -1,5 +1,6 @@
 #load packages
 library(tidyverse)
+library(glmnet)
 library(Matrix)
 library(MASS)
 library(Rcpp)
@@ -48,7 +49,7 @@ sim_data <- function(n, m, J, Sigma, A, mu) {
 
 
 #FUNCTION TO COMPUTE MoM ESTIMATES
-mom_estimator <- function(Y) {
+mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
   #get dimensions of parameters
   n <- dim(Y)[3]
   m <- dim(Y)[1]
@@ -86,17 +87,36 @@ mom_estimator <- function(Y) {
       P[j,k] <- log(Y_jk_mean) - log(Y_mean[j]) - log(Y_mean[k])
     }
   }
-  A_hat <- P %*% solve(Sigma_Z_hat)
+  
+  if (!penalty) {
+    A_hat <- P %*% solve(Sigma_Z_hat)
+  } else {
+    
+    #estimation using FISTA to solve for A
+    A_init <- P %*% solve(Sigma_Z_hat)
+    current_params <- list("Sigma_Z" = Sigma_Z_hat, "A" = A_init, "P" = P)
+    obs <- list("Y" = Y)
+    A_hat <- matrix(optim_A_penalty(obs = obs, current_params = current_params, est = "mom", line_search = FALSE, lambda = lambda), J, J)
+    
+    # estimation via J separate lasso regressions and using glmnet implementation
+    # for (j in 1:J) {
+    #   est <- glmnet(x = t(P), y = c(Sigma_Z_hat[j,]), family = "gaussian")
+    #   A_hat[j,] <- c(est$beta[,ncol(est$beta)])
+    # }
+  }
+  
 
   #estimator for Sigma
   Sigma_hat <- Sigma_Z_hat - P %*% solve(Sigma_Z_hat) %*% t(P)
 
   #return estimates
   return(list("Y" = Y,
+              "P" = P,
               "mu_hat" = mu_hat,
               "A_hat" = A_hat,
               "Sigma_Z_hat" = Sigma_Z_hat,
-              "Sigma_hat" = Sigma_hat))
+              "Sigma_hat" = Sigma_hat,
+              "MSE" = mean(apply(A_hat %*% Sigma_Z_hat - P, 1, norm, type = "2")^2)))
 }
 
 #HELPER FUNCTIONS FOR CONVERTING BETWEEN PARAMETER LIST TO VECTOR
@@ -224,6 +244,19 @@ obj_function2_for_S <- function(S_vec, params, data, scale = 1) {
   params_list$S <- array(S_vec, dim = c(m, J, n))
 
 
+  return(obj_function2(data = data, params = params_list, scale = scale))
+}
+
+obj_function2_for_A <- function(A_vec, params, data, scale = 1) {
+  
+  m <- dim(data$Y)[1]
+  J <- dim(data$Y)[2]
+  n <- dim(data$Y)[3]
+  
+  params_list <- params
+  params_list$A <- matrix(A_vec, nrow = J, ncol = J)
+  
+  
   return(obj_function2(data = data, params = params_list, scale = scale))
 }
 
@@ -1024,7 +1057,14 @@ vi_estimator_r <- function(sim_data_obj, init_mu, init_M, init_S, init_Sigma_Z, 
 #inint_A is a vector of length J X J specifying value of A parameter
 #optim_method specifies which optimizer to use for each coord desc iteration; must be one of "nloptr" or "optim"
 #max.iter specifies how many iterations to go before terminating
-vi_estimator2 <- function(sim_data_obj, init_mu, init_M, init_S, init_Sigma, init_A, optim_method = "optim", max.iter = 100, tol = 1e-4, verbose = FALSE, skip_coords = NA) {
+vi_estimator2 <- function(sim_data_obj, init_mu, init_M, init_S, init_Sigma, init_A, 
+                          optim_method = "optim", 
+                          max.iter = 100, 
+                          tol = 1e-4, 
+                          verbose = FALSE, 
+                          skip_coords = NA, 
+                          penalty = FALSE, 
+                          lambda = 1) {
 
   #get data sample and parameter dimensions
   Y <- sim_data_obj$Y
@@ -1037,9 +1077,9 @@ vi_estimator2 <- function(sim_data_obj, init_mu, init_M, init_S, init_Sigma, ini
   init_params <- vector(mode = "list")
   init_params$M <- array(init_M, dim = c(m, J, n))
   init_params$S <- array(init_S, dim = c(m, J, n))
-  init_params$A <- matrix(init_A, J, J)
-  init_params$Sigma <- matrix(init_Sigma, J, J)
   init_params$mu <- matrix(c(init_mu), nrow = 1)
+  init_params$Sigma <- matrix(init_Sigma, J, J)
+  init_params$A <- matrix(init_A, J, J)
 
   #set up before starting optimization loop
   param_names <- names(init_params)
@@ -1058,7 +1098,11 @@ vi_estimator2 <- function(sim_data_obj, init_mu, init_M, init_S, init_Sigma, ini
     for (i in 1:length(param_names)) {
       #get coordinate name
       coord_name <- param_names[i]
-
+      
+      if(verbose) {
+        print(coord_name)
+        print(paste0("Current value: ", unlist(past_params[coord_name])))
+      }
       #skip coordinates as specified
       if (coord_name %in% skip_coords) {
         next
@@ -1092,17 +1136,24 @@ vi_estimator2 <- function(sim_data_obj, init_mu, init_M, init_S, init_Sigma, ini
       )
 
       if (coord_name == "A") {
-
-        M_term1 <- matrix(0, nrow = J, ncol = J)
-        M_term2 <- matrix(0, nrow = J, ncol = J)
-        for (t in 1:(m-1)) {
-          M_term1 <- M_term1 + current_params$M[t+1,,] %*% t(current_params$M[t,,])
-          M_term2 <- M_term2 + current_params$M[t,,] %*% t(current_params$M[t,,])
+        
+        if (!penalty) {
+          M_term1 <- matrix(0, nrow = J, ncol = J)
+          M_term2 <- matrix(0, nrow = J, ncol = J)
+          for (t in 1:(m-1)) {
+            M_term1 <- M_term1 + current_params$M[t+1,,] %*% t(current_params$M[t,,])
+            M_term2 <- M_term2 + current_params$M[t,,] %*% t(current_params$M[t,,])
+          }
+          
+          S_sum <- diag(apply(apply(current_params$S,c(1,2),sum)[1:(m-1),], 2, sum))
+          A_update <- M_term1 %*% solve(M_term2 + S_sum)
+          new_coord_vec <- c(A_update)
+        } else {
+          
+          A_update <- optim_A_penalty(obs = obs, current_params = current_params, est = "vi", 
+                                      lambda = lambda, line_search = FALSE)
+          new_coord_vec <- c(A_update)
         }
-
-        S_sum <- diag(apply(apply(current_params$S,c(1,2),sum)[1:(m-1),], 2, sum))
-        A_update <- M_term1 %*% solve(M_term2 + S_sum)
-        new_coord_vec <- c(A_update)
 
       } else if (coord_name == "Sigma") {
 
@@ -1172,6 +1223,7 @@ vi_estimator2 <- function(sim_data_obj, init_mu, init_M, init_S, init_Sigma, ini
 
     #print values after one iteration
     #print(A_grad(c(current_params$A), data = obs, params = current_params, scale = -1))
+    
 
     #check if converged according to some criterion
     current_obj_val <- obj_function2(obs, current_params)
@@ -1202,13 +1254,157 @@ vi_estimator2 <- function(sim_data_obj, init_mu, init_M, init_S, init_Sigma, ini
   result <- current_params
   result$iter <- iter
   result$rel_diff <- rel_diff
+  result$EBIC <- -2*current_obj_val + log(n)*(sum(result$A != 0) + J + J^2) + 2*log(choose(J^2, sum(result$A != 0)))
+  
   return(result)
 }
 
 
 
+## IMPLEMENT LINE SEARCH!!!!!!
+optim_A_penalty <- function(obs, current_params, est = c("mom", "vi"), lambda, line_search = TRUE, tol = 1e-4, max.iter = 1000) {
+
+  # print(current_params$mu)
+  # print(current_params$Sigma)
+  # print(current_params$A)
+  # print(summary(c(current_params$M)))
+  # print(summary(c(current_params$S)))
+  #get data and parameter values (extract parameter values according to if it is mom or vi estimate)
+  Y <- obs$Y
+  J <- dim(Y)[2]
+  if (est == "vi") {
+    mu <- current_params$mu
+    M <- current_params$M
+    S <- current_params$S
+    Sigma <- current_params$Sigma
+  } else if (est == "mom") {
+    Sigma_Z <- current_params$Sigma_Z
+    P <- current_params$P
+  }
+  
+  #initialize optimization loop
+  converged <- FALSE
+  iter <- 0
+  #beta <- 0.9
+  A_current <- A_prev <- c(current_params$A)
+  nu_current <- nu_prev <- A_current
+  #initialize step size and factor by which to reduce it according to whether you do line search 
+  if (line_search) {
+    t <- 1
+    beta <- 0.9
+  } else {
+    #fixed step size using Lipschitz constant derived from Hessian
+    if (est == "mom") {
+      t <- 1/(2*norm(Sigma_Z %*% Sigma_Z, type = "2"))
+    }
+    if (est == "vi") {
+      Omega <- solve(Sigma)
+      t1 <- diag(apply(S[1:(m-1), ,], c(2), sum))
+      t2 <- matrix(apply(apply(M[1:(m-1),,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
+      #full_term <- Omega %*% (t1 + t2)
+      t <- 1/((norm(Omega, type = "2")) * norm(t1 + t2, type = "2"))
+    }
+  }
+  
+  #print(paste0("t: ", t))
+  #get initial objective function values
+  if (est == "mom") {
+    A_mat <- matrix(A_current, J, J)
+    obj_val_current <- obj_val_prev <- norm(A_mat %*% Sigma_Z - P, type = "F")^2
+  } else if (est == "vi") {
+    obj_val_current <- obj_val_prev <- obj_function2_for_A(A_current, params = current_params, data = obs, scale = -1)
+  }
+  
+  
+  #optimization loop for FISTA is implementation of algorithms from https://seas.ucla.edu/~vandenbe/236C/lectures/fista.pdf
+  #outer optimization loop
+  while(!converged) {
+    #update parameter values for current iteration
+    iter <- iter + 1
+    theta <- 2/(iter + 1)
+    y <- (1 - theta)*A_prev + theta*nu_prev
+    if (est == "vi") {
+      y_grad <- A_grad(y, obs, current_params, elbo_2 = TRUE, scale = -1)
+    } else if (est == "mom") {
+      y_mat <- matrix(y, J, J)
+      y_grad <- c(2*(y_mat %*% Sigma_Z - P) %*% Sigma_Z)
+    }
+    prox_input <-  y - t*y_grad
+    
+    #update x either with line search or fixed step
+    if (line_search) {
+      #set up the inner optimization loop for line search 
+      end_search <- FALSE
+      search_iter <- 0
+      #inner optimization loop for line search
+      while (!end_search) {
+        #update search iteration counter
+        search_iter <- search_iter + 1
+        
+        #update parameters
+        t <- beta*t
+        prox_input <- y - t*y_grad
+        A_current <- sign(prox_input)*pmax(abs(prox_input) - lambda, 0)
+        
+        #assess line search convergence criterion
+        if (est == "vi") {
+          A_obj_val <- obj_function2_for_A(A_current, data = obs, params = current_params, scale = -1)
+          y_obj_val <- obj_function2_for_A(y, data = obs, params = current_params, scale = -1)
+        } else if (est == "mom") {
+          A_mat <- matrix(A_current, J, J)
+          y_mat <- matrix(y, J, J)
+          A_obj_val <- norm(A_mat %*% Sigma_Z - P, type = "F")^2
+          y_obj_val <- norm(y_mat %*% Sigma_Z - P, type = "F")^2
+        }
+        
+        search_criteria <- y_obj_val + t(y_grad) %*% (A_current-y) + (1/(2*t))*norm(A_current-y, type = "2")^2
+        if (A_obj_val <= search_criteria) {
+          end_search <- TRUE
+        }
+        
+        if (search_iter > max.iter) {
+          end_search <- TRUE
+        }
+      }
+    } else {
+      # update A based on algorithm with fixed step size (so no line search)
+      A_current <- sign(prox_input)*pmax(abs(prox_input) - lambda, 0)
+    }
+  
+    #update nu value according to FISTA algorithm
+    nu_current <- A_prev + (1/theta)*(A_current - A_prev)
+    
+    #assess convergence
+    if (est == "vi") {
+      obj_val_current <- obj_function2_for_A(A_current, params = current_params, data = obs, scale = -1)
+    } else if (est == "mom") {
+      A_mat <- matrix(A_current, J, J)
+      obj_val_current <- norm(A_mat %*% Sigma_Z - P, type = "F")^2
+    }
+    # print(paste0("current obj: ", obj_val_current))
+    # print(paste0("prev obj: ", obj_val_prev))
+    rel_diff <- abs(obj_val_current - obj_val_prev)/abs(obj_val_prev)
+    
+    #print(paste0("rel diff: ", rel_diff))
+    if (rel_diff < tol) {
+      converged <- TRUE
+    }
+    if (iter > max.iter) {
+      converged <- TRUE
+    }
+    
+    #update previous parameter values
+    A_prev <- A_current
+    nu_prev <- nu_current
+    obj_val_prev <- obj_val_current
+  }
+  
+  #print(paste0("Final iter: ", iter))
+  return(A_current)
+}
 
 
-
-
-
+# mom_obj <- function(A_vec, P, Sigma_Z) {
+#   A_hat <- matrix(A_vec, 2, 2)
+#   return(sum(apply(A_hat %*% Sigma_Z - P, 1, norm, type = "2")^2))
+# }

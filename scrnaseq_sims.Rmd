@@ -1,16 +1,18 @@
 ---
 title: "scRNAseq Simulations"
 author: "Shirley Mathur"
-date: "2025-09-10"
+date:   "`r format(Sys.time(), '%d %B, %Y')`"
 output: pdf_document
+editor_options: 
+  markdown: 
+    wrap: 72
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+knitr::opts_chunk$set(echo = FALSE, eval = FALSE, warning = FALSE, message = FALSE)
 ```
 
-
-```{r load-packages}
+```{r load-packages, eval = TRUE}
 #load packages
 library(tidyverse)
 library(Matrix)
@@ -20,17 +22,18 @@ library(RcppArmadillo)
 library(nloptr)
 library(numDeriv)
 library(PLNmodels)
+library(patchwork)
 ```
 
-```{r load-functions}
+```{r load-functions, eval = TRUE}
 #import functions
 source("scrnaseq_project_functions.R")
 sourceCpp('scrnaseq_project_cpp_functions.cpp')
 ```
 
-
 ## Simulation Settings
-```{r sim-setup}
+
+```{r sim-setup, eval = TRUE}
 #set fixed parameter values
 set.seed(12)
 
@@ -39,14 +42,15 @@ n <- 100
 #set number of timepoints per sample
 m <- 5
 #set number of categories
-J <- 2
+J <- 10
 
 #set VAR(1) noise covariance(Sigma), VAR coefficient matrix (A)
-Sigma <- diag(0.5, nrow = J, ncol = J) 
-A <- matrix(0.2, 2,2)
+#Sigma <- matrix(c(0.5, 0.3, 0.3, 0.5), nrow = J, ncol = J) 
+Sigma <- diag(0.5, nrow = J, ncol = J)
+#A <- matrix(c(0.5, rep(0,J^2 - 1)), nrow = J)
+#A <- matrix(0.1*1:J^2, nrow = J)
 #A = matrix(c(0.1,0.5,0.3,0.7),2,2)
-#A <- sparseMatrix(i = 1:J, j = sample(1:J, J), x = 0.5, dims = c(J,J))
-#A <- diag(0.5, nrow = J, ncol = J)
+A <- matrix(sparseMatrix(i = 1:J, j = sample(1:J, J), x = 0.5, dims = c(J,J)), J, J)
 Sigma_Z <- matrix(solve(diag(1, J*J, J*J) - kronecker(A, A)) %*% c(Sigma),
        nrow = J, ncol = J)
 
@@ -57,30 +61,35 @@ Sigma_Z <- matrix(solve(diag(1, J*J, J*J) - kronecker(A, A)) %*% c(Sigma),
 mu <- matrix(rep(0.5, J), nrow = J)
 
 #setup for simulation
-nsim <- 1000
+nsim <- 5
 elbo2 <- TRUE #determine if ELBO based on likelihood conditional on first timepoint or not will be used (will be used if TRUE)
+penalty <- TRUE #determine whether to use penalized estimators or not
 if (elbo2) {full_params <- c("mu", "Sigma", "A")} else { full_params <- c("mu", "Sigma_Z", "A") }
 skip_params <- NA
 
-sample_list <- vector(mode = "list")
-sim_mu_results <- array(NA, dim = c(3,2,nsim),
-                     dimnames = list("est_method" = c("mom", "vi", "chiquet"),
-                                  "est" = c("mu1", "mu2"),
+sim_sample_list <- vector(mode = "list")
+sim_mom_list <- vector(mode = "list")
+
+sim_mu_results <- array(NA, dim = c(2,J,nsim),
+                     dimnames = list("est_method" = c("mom", "vi"),
+                                  "est" = paste0("mu", 1:J),
                                   "iter" = 1:nsim))
 
-sim_Sigma_Z_results <- array(NA, dim = c(2,4,nsim),
+sim_Sigma_Z_results <- array(NA, dim = c(2,J^2,nsim),
                         dimnames = list("est_method" = c("mom", "vi"),
-                                        "est" = c("SZ_11", "SZ_21", "SZ_12", "SZ_22"),
+                                        "est" = paste0("SZ_", paste0(rep(1:J,J), rep(1:J, each = J))),
                                         "iter" = 1:nsim))
 
-sim_Sigma_results <- array(NA, dim = c(3,4,nsim),
-                        dimnames = list("est_method" = c("mom", "vi", "chiquet"),
-                                        "est" = c("Sigma_11", "Sigma_21", "Sigma_12", "Sigma_22"),
+sim_Sigma_results <- array(NA, dim = c(2,J^2,nsim),
+                        dimnames = list("est_method" = c("mom", "vi"),
+                                        "est" = paste0("Sigma_", paste0(rep(1:J,J), rep(1:J, each = J))),
                                         "iter" = 1:nsim))
 
-sim_A_results <- array(NA, dim = c(2,4,nsim),
+sim_A_results <- array(1:(2*J^2*nsim), dim = c(2,J, J,nsim),
                              dimnames = list("est_method" = c("mom", "vi"),
-                                             "est" = c("A_11", "A_21", "A_12", "A_22"),
+                                             #"est" = paste0("A_", paste0(rep(1:J,J), rep(1:J, each = J))),
+                                             "row" = 1:J,
+                                             "column" = 1:J,
                                              "iter" = 1:nsim))
 
 A_max_eig_mod <- rep(NA, nsim)
@@ -102,33 +111,48 @@ sim_settings <- list("n" = n,
                      "opt_params" = setdiff(full_params, skip_params))
 ```
 
-
-* Sample size (n): `r n`
-* Number of timepoints (m): `r m`
-* Dimension of outcome (J): `r J`
-* Number of simulation runs: `r nsim`
-* Parameters optimized over: `r setdiff(full_params, skip_params)`
-* ELBO Utilized: `r if_else(elbo2, "Conditional on Z_1", "Original")`
-
+-   Sample size (n): `r n`
+-   Number of timepoints (m): `r m`
+-   Dimension of outcome (J): `r J`
+-   Number of simulation runs: `r nsim`
+-   Parameters optimized over: `r setdiff(full_params, skip_params)`
+-   ELBO Utilized: `r if_else(elbo2, "Conditional on Z_1", "Original")`
+-   Penalty:
+    `r if_else(penalty, "penalized estimators", "non-penalized estimators")`
 
 ## Simulation Results
-```{r run-sims, eval = FALSE}
+
+```{r run-sims}
 for (i in 1:nsim) {
+  #print(i)
+  #print iteration for every 50 sims
+  # if (i %% 50 == 0) {
+  #   print(paste0("Simulation iteration: ", i))
+  # }
+  
   #generate sample data
   temp_sample <- sim_data(n, m, J, Sigma, A, mu)
   sample_list[[i]] <- temp_sample
   
   #COMPUTE MoM ESTIMATORS and store result
-  mom_estimates <- mom_estimator(temp_sample$Y)
-  sim_mu_results["mom", ,paste0(i)] <- mu_hat <- mom_estimates$mu_hat
-  sim_Sigma_Z_results["mom", ,paste0(i)] <- Sigma_Z_hat_vec <- c(mom_estimates$Sigma_Z_hat)
-  sim_Sigma_results["mom", , paste0(i)] <- Sigma_hat_vec <- c(mom_estimates$Sigma_hat)
-  sim_A_results["mom", ,paste0(i)] <- A_hat_vec <- c(mom_estimates$A_hat)
-  
+  lambda <- seq(1e-2,1, length.out = 100)
+  mom_estimates <- vector(mode = "list")
+  for (l in 1:length(lambda)) {
+    mom_estimates[[l]] <- mom_estimator(temp_sample$Y, penalty = penalty, lambda = lambda[l])
+  }
+  sim_mom_list[[i]] <- list("lambda" = lambda, "estimates" = mom_estimates)
+  # sim_mu_results["mom", ,paste0(i)] <- mu_hat <- mom_estimates$mu_hat
+  # Sigma_Z_hat_vec <- c(mom_estimates$Sigma_Z_hat)
+  # sim_Sigma_Z_results["mom", ,paste0(i)] <- c(mom_estimates$Sigma_Z_hat)
+  # Sigma_hat_vec <- c(mom_estimates$Sigma_hat)
+  # sim_Sigma_results["mom", , paste0(i)] <- c(mom_estimates$Sigma_hat)
+  # A_hat_vec <- c(mom_estimates$A_hat)
+  # sim_A_results["mom", , ,paste0(i)] <- mom_estimates$A_hat
+
   #COMPUTE VI ESTIMATES and store result
   if (!elbo2) {
-    vi_est <- vi_estimator(temp_sample, 
-                         init_mu = mu_hat, 
+    vi_est <- vi_estimator(temp_sample,
+                         init_mu = mu_hat,
                          init_Sigma_Z = Sigma_Z_hat_vec,
                          init_A = A_hat_vec,
                          init_M = rep(0, m*J*n),
@@ -136,42 +160,83 @@ for (i in 1:nsim) {
                          optim_method = "nloptr",
                          max.iter = 100,
                          skip_coords = skip_params)
-    
+
     sim_Sigma_Z_results["vi", ,paste0(i)] <- c(vi_est$Sigma_Z)
-    
+
   } else {
-    vi_est_init <- vi_estimator2(temp_sample,
-                         init_mu = mu_hat,
-                         init_Sigma = Sigma_hat_vec,
-                         init_A = A_hat_vec,
-                         init_M = rep(0, m*J*n),
-                         init_S = rep(1, m*J*n),
-                         optim_method = "nloptr",
-                         max.iter = 100,
-                         skip_coords = full_params)
+    #compute warm start values with non-penalized MoM estimates
+    mom_estimates_nopen <-  mom_estimator(temp_sample$Y, penalty = FALSE)
+    A_hat_vec <- c(mom_estimates_nopen$A_hat)
+    mu_hat <- mom_estimates_nopen$mu_hat
+    Sigma_hat_vec <- c(mom_estimates_nopen$Sigma_hat)
 
-    M_fix <- c(vi_est_init$M)
-    S_fix <- c(vi_est_init$S)
+    #not getting fixed M and S first
+    vi_estimates <- vector(mode = "list")
+    lambda <- seq(1e-3, 1, length.out = 1000)
+    for (l in 1:length(lambda)) {
+      print(l)
+      vi_estimates[[l]] <- vi_estimator2(temp_sample,
+                        init_mu = mu_hat,
+                        init_Sigma = Sigma_hat_vec,
+                        init_A = A_hat_vec,
+                        init_M = rep(0, m*J*n),
+                        init_S = rep(1, m*J*n),
+                        optim_method = "nloptr",
+                        max.iter = 100,
+                        penalty = penalty,
+                        lambda = lambda[l],
+                        verbose = FALSE,
+                        skip_coords = skip_params)
+    }
 
-    vi_est <- vi_estimator2(temp_sample, 
-                         init_mu = mu_hat, 
-                         init_Sigma = Sigma_hat_vec,
-                         init_A = A_hat_vec,
-                         init_M = M_fix,
-                         init_S = S_fix,
-                         optim_method = "nloptr",
-                         max.iter = 100,
-                         tol = 1e-8,
-                         skip_coords = c("M", "S", skip_params))
-    
+    vi_est <- vi_estimator2(temp_sample,
+                        init_mu = mu_hat,
+                        init_Sigma = Sigma_hat_vec,
+                        init_A = A_hat_vec,
+                        init_M = rep(0, m*J*n),
+                        init_S = rep(1, m*J*n),
+                        optim_method = "nloptr",
+                        max.iter = 100,
+                        penalty = penalty,
+                        lambda = 1e-2,
+                        verbose = FALSE,
+                        skip_coords = skip_params)
+
+
+    # #getting M and S fixed first
+    # vi_est_init <- vi_estimator2(temp_sample,
+    #                      init_mu = mu_hat,
+    #                      init_Sigma = Sigma_hat_vec,
+    #                      init_A = A_hat_vec,
+    #                      init_M = rep(0, m*J*n),
+    #                      init_S = rep(1, m*J*n),
+    #                      optim_method = "nloptr",
+    #                      max.iter = 100,
+    #                      skip_coords = full_params)
+    #
+    # M_fix <- c(vi_est_init$M)
+    # S_fix <- c(vi_est_init$S)
+    #
+    # vi_est <- vi_estimator2(temp_sample,
+    #                      init_mu = mu_hat,
+    #                      init_Sigma = Sigma_hat_vec,
+    #                      init_A = A_hat_vec,
+    #                      init_M = M_fix,
+    #                      init_S = S_fix,
+    #                      optim_method = "nloptr",
+    #                      max.iter = 100,
+    #                      penalty = TRUE,
+    #                      lambda = 1e-3,
+    #                      skip_coords = c("M", "S", skip_params))
+
     sim_Sigma_results["vi", ,paste0(i)] <- c(vi_est$Sigma)
     sim_M_list[[i]] <- vi_est$M
     sim_S_list[[i]] <- vi_est$S
   }
-  
-  
+
+
   sim_mu_results["vi", ,paste0(i)] <- vi_est$mu
-  sim_A_results["vi", ,paste0(i)] <- c(vi_est$A)
+  sim_A_results["vi", , ,paste0(i)] <- vi_est$A
   A_max_eig_mod[i] <- max(Mod(eigen(vi_est$A)$values))
   
 }
@@ -190,7 +255,7 @@ for (i in 1:nsim) {
   rownames(temp_list$counts) <- rownames(temp_list$covariates) <- c(1:(m*n))
   colnames(temp_list$counts) <- c("Y1", "Y2")
   
-  temp_prep_data <- prepare_data(temp_list$counts, temp_list$covariates)
+  temp_prep_data <- prepare_data(temp_list$counts, temp_list$covariates, offset = "none")
 
   
   #COMPUTE MoM ESTIMATORS and store result
@@ -250,7 +315,7 @@ for (i in 1:nsim) {
   A_max_eig_mod[i] <- max(Mod(eigen(vi_est$A)$values))
   
   #COMPUTE PLN ESTIMATES AND STORE RESULT
-  pln_fit <- PLN(Abundance ~ 1, temp_prep_data)
+  pln_fit <- PLN(Abundance ~ 1, temp_prep_data, control = PLN_param(trace = 1))
   sim_mu_results["chiquet", ,paste0(i)] <- c(pln_fit$model_par$Theta)
   sim_Sigma_results["chiquet",,paste0(i)] <- c(pln_fit$model_par$Sigma)
   
@@ -259,7 +324,8 @@ for (i in 1:nsim) {
 
 ```{r report-results}
 #save results
-save(sim_settings, sim_mu_results, sim_A_results, sim_Sigma_results, sim_Sigma_Z_results, A_max_eig_mod, sim_M_list, sim_S_list, sample_list, file = "all_params_cond_elbo_compare_chiquet_sim.Rdata")
+save(sim_settings, sim_mu_results, sim_A_results, sim_Sigma_results, sim_Sigma_Z_results, A_max_eig_mod, sim_M_list, sim_S_list, sample_list, file = "all_params_J2_sparseA_penalized_sim.Rdata")
+
 #tabulate results
 sim_res_df <- as.data.frame.table(sim_mu_results, responseName = "value")
 sim_SZ_res_df <- as.data.frame.table(sim_Sigma_Z_results, responseName = "value")
@@ -271,7 +337,10 @@ mu_summary <- sim_res_df %>% group_by(est_method, est) %>%
   summarise(mean_val = mean(value),
             median_val = median(value),
             sd = sd(value)) %>%
-  mutate(true_val = if_else(est == "mu1", mu[1], mu[2])) %>%
+  mutate(true_val = case_when(est == "mu1" ~ mu[1],
+                              est == "mu2" ~ mu[2],
+                              est == "mu3" ~ mu[3],
+                              est == "mu4" ~ mu[4])) %>%
   relocate(true_val, .before = mean_val)
 
 #data frame of Sigma_Z results
@@ -297,15 +366,19 @@ sigma_summary <- sim_Sigma_res_df %>% group_by(est_method, est) %>%
   relocate(true_val, .before = mean_val)
 
 #data frame of A results
-A_summary <- sim_A_res_df %>% group_by(est_method, est) %>%
+A_summary <- sim_A_res_df %>% 
+  mutate(index = paste0(row, column)) %>% 
+  group_by(est_method, index) %>%
   summarise(mean_val = mean(value),
             median_val = median(value),
-            sd = sd(value)) %>%
-  mutate(true_val = case_when(est == "A_11" ~ A[1,1],
-                           est == "A_12" ~ A[1,2],
-                           est == "A_21" ~ A[2,1],
-                           est == "A_22" ~ A[2,2])) %>%
-  relocate(true_val, .before = mean_val)
+            sd = sd(value),
+            prop_zero = mean(value == 0)) 
+  # mutate(true_val = case_when(est == "A_11" ~ A[1,1],
+  #                          est == "A_12" ~ A[1,2],
+  #                          est == "A_21" ~ A[2,1],
+  #                          est == "A_22" ~ A[2,2]),
+  #        prop_nonzero = 1 - prop_zero) %>%
+  # relocate(true_val, .before = mean_val)
 
 all_summary <- data.frame()
 
@@ -331,16 +404,20 @@ all_summary %>% kableExtra::kable(digits = 3, caption = "Summary of Results")
 # #plot of mu errors
 # png("mu_errors.png", width = 6, height = 6, units = "in", res = 300)
 if (!("mu" %in% skip_params)) {
-  sim_res_df %>% mutate(error = if_else(est == "mu1", value - mu[1], value - mu[2])) %>%
-  ggplot(mapping = aes(x = error)) +
-  geom_boxplot() +
-  facet_wrap(est_method ~ est, scales = "free") +
-  labs(title = "Summary of Errors Across Simulations for mu",
-       x = "Error (Est - True)") +
-  theme_bw() +
-  theme(axis.text.y=element_blank(),
-        axis.ticks.y=element_blank())
-# dev.off()
+  sim_res_df %>% 
+    mutate(error = case_when(est == "mu1" ~ value - mu[1],
+                             est == "mu2" ~ value - mu[2],
+                             est == "mu3" ~ value - mu[3],
+                             est == "mu4" ~ value - mu[4]))%>%
+    ggplot(mapping = aes(x = error)) +
+    geom_boxplot() +
+    facet_grid(est_method ~ est) +
+    labs(title = "Summary of Errors Across Simulations for mu",
+         x = "Error (Est - True)") +
+    theme_bw() +
+    theme(axis.text.y=element_blank(),
+          axis.ticks.y=element_blank())
+  # dev.off()
 }  
 
 
@@ -384,13 +461,13 @@ if (!("A" %in% skip_params)) {
 #plot of Sigma errors
 if (!("Sigma" %in% skip_params) & elbo2) {
   sim_Sigma_res_df %>%
-  mutate(error = case_when(est == "Sigma_11" ~ value - Sigma_Z[1,1],
-                           est == "Sigma_12" ~ value - Sigma_Z[1,2],
-                           est == "Sigma_21" ~ value - Sigma_Z[2,1],
-                           est == "Sigma_22" ~ value - Sigma_Z[2,2])) %>%
+  mutate(error = case_when(est == "Sigma_11" ~ value - Sigma[1,1],
+                           est == "Sigma_12" ~ value - Sigma[1,2],
+                           est == "Sigma_21" ~ value - Sigma[2,1],
+                           est == "Sigma_22" ~ value - Sigma[2,2])) %>%
   ggplot(mapping = aes(x = error)) +
   geom_boxplot() +
-  facet_wrap(est_method ~ est, scales = "free") +
+  facet_grid(est_method ~ est, scales = "free") +
   labs(title = "Summary of Errors Across Simulations for Sigma",
        x = "Error (Est - True)") +
   theme_bw() +
@@ -399,4 +476,299 @@ if (!("Sigma" %in% skip_params) & elbo2) {
 }
 ```
 
+```{r mom-model-selection-sims}
+nsim <- 100
+for (i in 1:nsim) {
+  print(i)
+  #generate sample data
+  temp_sample <- sim_data(n, m, J, Sigma, A, mu)
+  sim_sample_list[[i]] <- temp_sample
+  
+  #COMPUTE MoM ESTIMATORS and store result
+  lambda <- seq(1e-3,1, length.out = 1000)
+  mom_estimates <- vector(mode = "list")
+  
+  for (l in 1:length(lambda)) {
+    mom_estimates[[l]] <- mom_estimate_temp <- mom_estimator(temp_sample$Y, penalty = penalty, lambda = lambda[l])
+  }
+  sim_mom_list[[i]] <- list("lambda" = lambda, "estimates" = mom_estimates)
+}
 
+```
+
+
+```{r load-lambda-selection-results, eval = TRUE}
+#load appropriate results and extract relevant information
+#load("vi_ebic_penalty_mom_model_selection.Rdata")
+#load("exploring_penalty_mom_model_selection.Rdata")
+load("Simulation Results/mom_penalized_model_selection_100_sims.Rdata")
+A <- sim_settings$A
+nsim <- length(sim_mom_list)
+n <- sim_settings$n
+J <- sim_settings$J
+m <- sim_settings$m
+lambdas <- sim_mom_list[[1]]$lambda
+n_lambda <- length(lambdas)
+```
+
+```{r lambda-selection-results, eval = TRUE}
+#get true support of A
+A_true_support <- which(A != 0)
+
+#initialize data frame to store edges recovered, fpr, and tpr for each lambda and each sim
+pdata_list <- vector(mode = "list")
+
+for (i in 1:nsim) {
+  est_support <- lapply(sim_mom_list[[i]]$estimates, function(x) {which(x$A != 0)})
+  tpr <- sapply(est_support, function (x) {length(intersect(x, A_true_support))/length(A_true_support)})
+  fpr <- sapply(est_support, function (x) {ifelse(length(x) > 0, length(setdiff(x, A_true_support))/(J^2 - length(A_true_support)), 0)})
+  num_edges <- sapply(est_support, function (x) {length(x)})
+  #print(which(tpr == 1))
+  temp_pdata <- data.frame(lambda = sim_mom_list[[i]]$lambda,
+                      fpr = fpr,
+                      num_edges = num_edges,
+                      tpr = tpr,
+                      sim = i)
+  pdata_list[[i]] <- temp_pdata
+  
+  #make plots of first 5 sims only
+  if (i <= 5) {
+    temp_plot <- temp_pdata %>% ggplot(mapping = aes(x = num_edges, y = tpr)) +
+    geom_point(alpha = 0.5) +
+    labs(title = paste0("TPR in Sim ", i), 
+         x = "Number Edges Recovered",
+         y = "True Positive Rate") +
+    ylim(0, 1.2) +
+    xlim(0, 20) +
+    theme_bw()
+  
+  assign(x = paste0("p",i), value = temp_plot)
+  }
+  
+  #  plot(sim_mom_list[[i]]$lambda, tpr, xlab = "lambda", ylab = "TPR", main = paste0("TPR in Sim ", i))
+}
+
+edge_recovery_metrics_full <- do.call(rbind, pdata_list)
+
+
+#add evaluations of various evaluation criteria to dataframe with fpr and tpr to try and understand what might work
+# for model selection in this scenario
+
+#list out ess and criteria types you want to assess
+ess_types <- c("ss", "ess", "ess2", "ess3", "ess4")
+criteria_types <- c("mse", "bic", "ebic", "bic2", "ebic2")
+
+#set up array to store info on: simulation run, lambda, ess computation approach, and model selection criteria type
+model_selection_results <- array(NA, dim = c(nsim, n_lambda,length(ess_types), length(criteria_types)),
+                                 dimnames = list("sim" = 1:nsim,
+                                                 "lambda" = lambdas,
+                                                 "ess_type" = ess_types,
+                                                 "criteria" = criteria_types))
+
+ess_values <- array(NA, dim = c(nsim, length(ess_types)),
+                    dimnames = list("sim" = 1:nsim,
+                                    "ess_type" = ess_types))
+
+for (i in 1:nsim) {
+  
+  #compute terms necessary to estimate autocorrelation for lags of k=1, 2, ..., T-1
+  Y_samp <- sim_sample_list[[i]]$Y
+  Y_means <- apply(Y_samp, 2, mean)
+  Y_vars <- apply(Y_samp, 2, function (x) {var(c(x))})
+  Y_samp_centered <- sweep(Y_samp, 2, Y_means)
+  rho_1_est <- apply(Y_samp_centered[1:(m-1),,]*Y_samp_centered[2:m,,], 2, mean)/Y_vars
+  rho_k_full <- apply(matrix(1:(m-1), 1), 2, function (x) {(1-x/m)*rho_1_est^x})
+  tau_full <- apply(rho_k_full, 1, function (x) {1 + 2*sum(x)})
+  
+  #COMPUTE MODEL SELECTION METRICS FOR EACH DIFFERENT ESS COMPUTATION APPROACH
+  for (ess_type in ess_types) {
+    #compute ess accordingly and store in ess_values array
+    ess_values[i, ess_type] <- N_eff <- case_when(ess_type == "ss" ~ n*(m-1),
+                       ess_type == "ess" ~ n*(m-1)/(1 + 2*max(rho_1_est)),
+                       ess_type == "ess2" ~ n*(m-1)/(1 + 2*mean(rho_1_est)),
+                       ess_type == "ess3" ~ n*(m-1)/(max(tau_full)),
+                       ess_type == "ess4" ~ n*(m-1)/(mean(tau_full)))
+    
+    #compute model selection criteria for current ess type
+    for (crit in criteria_types) {
+      if (crit == "mse") {
+        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {norm(x$A_hat - x$P %*% solve(x$Sigma_Z_hat), type = "F")})
+      }
+      if (crit == "bic") {
+        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {N_eff*norm(x$A_hat - x$P %*% solve(x$Sigma_Z_hat), type = "F") + log(N_eff)*sum(x$A_hat != 0)})
+      }
+      
+      if (crit == "ebic") {
+        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {N_eff*norm(x$A_hat - x$P %*% solve(x$Sigma_Z_hat), type = "F") + log(N_eff)*sum(x$A_hat != 0) + log(choose(J^2, sum(x$A_hat != 0)))})
+      }
+      
+      if (crit == "bic2") {
+        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {N_eff*norm(x$A_hat %*% x$Sigma_Z_hat - x$P, type = "F") + log(N_eff)*sum(x$A_hat != 0)})
+      }
+      
+      if (crit == "ebic2") {
+        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {N_eff*norm(x$A_hat %*% x$Sigma_Z_hat - x$P, type = "F") + log(N_eff)*sum(x$A_hat != 0) + log(choose(J^2, sum(x$A_hat != 0)))})
+      }
+      
+    }
+  }
+}
+
+#transfer array results into a data frame
+model_selection_results_df <- as.data.frame.table(model_selection_results, responseName = "value")
+```
+
+Below are results for the true positive rate and the number of edges
+recovered for the first 5 sims across a grid of `r n_lambda` lambda
+values with increments of `r lambdas[2] - lambdas[1]` from
+`r lambdas[1]` to `r sim_mom_list[[1]]$lambda[n_lambda]`.
+
+```{r results-from-specific-sims, eval = TRUE}
+#plot fpr and edges recovered plots for first five sims
+(p1 + p2 + p3)/(p4 + p5)
+
+# # plot out ROC curves along with colored gradient for various selection criteria for first 5 sims
+# pdata_full %>% filter(sim <= 5) %>%
+#   ggplot(mapping = aes(x = fpr, y = tpr, color = mse)) +
+#   geom_point() +
+#   labs(title = "ROC Curves for Simulation and MSE",
+#        xlab = "FPR",
+#        ylab = "TPR",
+#        color = "MSE") +
+#   facet_wrap(~ sim) +
+#   theme_bw()
+# 
+# # plot out fpr and ebic
+# pdata_full %>% filter(sim <= 5) %>%
+#   ggplot(mapping = aes(x = fpr, y = tpr, color = bic_ess)) +
+#   geom_point() +
+#   labs(title = "ROC Curves for Simulation and BIC with ESS",
+#        xlab = "FPR",
+#        ylab = "TPR",
+#        color = "EBIC") +
+#   facet_wrap(~ sim) +
+#   theme_bw()
+# 
+# # plot out fpr and ebic
+# pdata_full %>% filter(sim <= 5) %>%
+#   ggplot(mapping = aes(x = fpr, y = tpr, color = ebic_ess)) +
+#   geom_point() +
+#   labs(title = "ROC Curves for Simulation and EBIC",
+#        xlab = "FPR",
+#        ylab = "TPR",
+#        color = "EBIC") +
+#   facet_wrap(~ sim) +
+#   theme_bw()
+
+# pdata_full %>%
+#   ggplot(mapping = aes(x = fpr, y = tpr, color = vi_ebic)) +
+#   geom_point() +
+#   labs(title = "ROC Curves for Simulation and VI EBIC",
+#        xlab = "FPR",
+#        ylab = "TPR",
+#        color = "VI_EBIC") +
+#   facet_wrap(~ sim) +
+#   theme_bw()
+```
+
+Some notation for clarity:
+
+-   There $N$ samples, $T$ time-points, and $J$ categories
+
+-   $\bar{Y}_j := \frac{1}{NT}\sum\limits_{i=1}^N\sum\limits_{t=1}^{T} Y_{ij}^{(t)}$
+
+-   $\hat{\sigma}_j^2 :=  \frac{1}{NT - 1}\sum\limits_{i=1}^N\sum\limits_{t=1}^{T} \left(Y_{ij}^{(t)} - \bar{Y}_j\right)^2$
+
+-   $\hat{\rho}_j :=  \frac{1}{\hat{\sigma}_j^2}\frac{1}{N(T-1)}\sum\limits_{i=1}^N\sum\limits_{t=1}^{T-1}\left(Y^{(t)}_{ij} - \bar{Y}_j \right)\left(Y^{(t+1)}_{tj} - \bar{Y}_j \right)$
+
+-   ${\hat{\rho}}_{\max} := \underset{j \in 1:J}{\max}\hat{\rho}_j$
+
+-   ${\hat{\rho}}_{\text{mean}} := \frac{1}{J}\sum\limits_{j=1}^J\hat{\rho}_j$
+
+-   $\tau_j := 1 + 2\sum\limits_{k=1}{T-1} \left(1 - \frac{k}{T} \right)\hat{\rho}_j^{k}$
+
+-   $\tau_{\max} := \underset{1 \leq j \leq J}{\max} \tau_j$
+
+-   $\tau_{\text{mean}} := \frac{1}{J}\sum\limits_{j=1}^J \tau_j$
+
+In the below, the selection criteria are computed as follows:
+
+-   `bic` and `ebic` utilize $A - P\Sigma_Z^{-1}$ as the moment matching
+    criterion
+
+-   `bic2` and `ebic2` utilize $A\Sigma_Z - P$ as the moment matching
+    criterion
+
+-   `ess` specifies that the effective sample size is computed as
+    $\text{ESS} = N(T-1)\left(1 - 2{\hat{\rho}}_{\max} \right)^{-1}$
+
+-   `ess2` specifies that the effective sample size is computed as
+    $\text{ESS} = N(T-1)\left(1 - 2{\hat{\rho}}_{\text{mean}} \right)^{-1}$
+
+-   `ess3` specifies that the effective sample size is computed as
+    $\text{ESS} = \frac{N(T-1)}{\tau_{\max}}$
+
+-   `ess4` specifies that the effective sample size is computed as
+    $\text{ESS} = \frac{N(T-1)}{\tau_{\text{mean}}}$
+
+```{r selection-results-summary, eval = TRUE}
+#selected models according to different criteria across all simulations in one dataframe
+selection_sims_summary <- model_selection_results_df %>%
+  mutate(sim = as.numeric(sim)) %>%
+  group_by(sim, ess_type, criteria) %>%
+  summarise(min_val = min(value),
+            which_min = which.min(value)) %>%
+  mutate(lambda = lambdas[which_min]) %>%
+  dplyr::select(!c(which_min))
+  
+selection_sims_summary_full <- left_join(selection_sims_summary, edge_recovery_metrics_full) %>%
+  rename(num_edges_criteria = num_edges, tpr_criteria = tpr)
+
+
+#in summary frame, from full results list, add in empirically which was the lambda with the smalles number of edges that gave a tpr of 1
+edge_recovery_summary <- edge_recovery_metrics_full %>%
+  filter(tpr == 1) %>%
+  group_by(sim) %>%
+  summarise(minimal_edges = min(num_edges),
+            which_min = which.min(num_edges)) %>%
+  mutate(lambda = lambdas[which_min]) %>%
+  dplyr::select(!c(which_min))
+
+# see which, if any, criteria actually select the lambda that empirically had the smallest number of edges and a tpr of 1 across the simulations
+criteria_comparison_results <- left_join(selection_sims_summary_full, edge_recovery_summary, by = c("sim"), suffix = c("_criteria", "_empirical"))
+
+criteria_comparison_results_summary <- criteria_comparison_results %>% 
+  ungroup() %>% 
+  group_by(criteria) %>% 
+  summarise(median_lambda_diff = median(lambda_empirical - lambda_criteria),
+            median_edges_diff = median(minimal_edges - num_edges_criteria))
+
+
+#visualize edges recovered from all selection methods
+selection_sims_summary_full %>% ggplot(mapping = aes(x = num_edges_criteria)) +
+  geom_histogram() +
+  facet_grid(criteria ~ ess_type) +
+  labs(title = "Histograms of Edges Recovered with Various Selection Criteria",
+       x = "Edges Recovered",
+       caption = "Histograms of the edges recovered by the model selected by the various selection criteria across 100 simulations.") +
+  theme_bw()
+
+selection_sims_summary_full %>% ggplot(mapping = aes(x = num_edges_criteria, y = tpr_criteria)) +
+  geom_point() +
+  facet_grid(criteria ~ ess_type) +
+  labs(title = "Edges Recovered and TPR across Sims with Various Selection Criteria",
+       x = "Edges Recovered",
+       y = "TPR",
+       caption = "TPR and edges recovered by the model selected by the various selection criteria across 100 simulations.") +
+  theme_bw()
+
+criteria_comparison_results %>% mutate(minimal_edges_diff = num_edges_criteria - minimal_edges) %>%
+  ggplot(mapping = aes(x = minimal_edges_diff)) +
+  geom_boxplot() +
+  facet_grid(criteria ~ ess_type) +
+  labs(title = "Difference in empirical minimial edges for tpr of 1 and num edges with selected model",
+       x = "edges difference (selected model - empirical best model)",
+       caption = "Difference in selected model edges and empirical minimial edges for TPR of 1 by the various selection criteria across 100 simulations.") +
+  theme_bw()
+  
+```

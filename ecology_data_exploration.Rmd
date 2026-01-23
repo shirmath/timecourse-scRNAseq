@@ -1,0 +1,29 @@
+---
+title: "ecology_data_exploration"
+output: pdf_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, eval = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r load-packages, eval = TRUE}
+#load packages
+library(tidyverse)
+library(Matrix)
+library(MASS)
+library(Rcpp)
+library(RcppArmadillo)
+library(nloptr)
+library(numDeriv)
+library(PLNmodels)
+library(patchwork)
+```
+
+```{r load-data}
+all_taxa_df <- read.csv("Datasets/TREAM_allTaxa.csv")
+sitelevel_df <- read.csv("Datasets/TREAM_siteLevel.csv")
+siteyearlevel_df <- read.csv("Datasets/TREAM_siteYearLevel.csv")
+```
+
