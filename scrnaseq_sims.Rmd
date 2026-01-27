@@ -477,7 +477,7 @@ if (!("Sigma" %in% skip_params) & elbo2) {
 ```
 
 ```{r mom-model-selection-sims}
-nsim <- 100
+nsim <- 5
 for (i in 1:nsim) {
   print(i)
   #generate sample data

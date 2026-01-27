@@ -1368,7 +1368,7 @@ optim_A_penalty <- function(obs, current_params, est = c("mom", "vi"), lambda, l
       }
     } else {
       # update A based on algorithm with fixed step size (so no line search)
-      A_current <- sign(prox_input)*pmax(abs(prox_input) - lambda, 0)
+      A_current <- sign(prox_input)*pmax(abs(prox_input) - t*lambda, 0)
     }
   
     #update nu value according to FISTA algorithm
