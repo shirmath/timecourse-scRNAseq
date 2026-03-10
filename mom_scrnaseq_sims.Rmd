@@ -1,0 +1,348 @@
+---
+title: "MoM Simulations"
+author: "Shirley Mathur"
+date: "2026-02-04"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, eval = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r load-packages, eval = TRUE}
+#load packages
+library(tidyverse)
+library(Matrix)
+library(MASS)
+library(Rcpp)
+library(RcppArmadillo)
+library(nloptr)
+library(numDeriv)
+library(PLNmodels)
+library(patchwork)
+library(data.table)
+```
+
+```{r load-functions}
+#import functions
+source("scrnaseq_project_functions.R")
+sourceCpp('scrnaseq_project_cpp_functions.cpp')
+```
+
+
+## Simulation Settings
+
+```{r sim-setup, eval = TRUE}
+#set fixed parameter values
+set.seed(12)
+
+#set number of samples
+n <- 100
+#set number of timepoints per sample
+m <- 5
+#set number of categories
+J <- 4
+#set number of covariates (excluding intercept)
+p <- 3
+#compute number of lags
+n_lags <- n*(m-1)
+
+#set "standard-ish" settings for simulation
+A <- matrix(sparseMatrix(i = 1:J, j = sample(1:J, J), x = 0.5, dims = c(J,J)), J, J)
+Sigma <- diag(0.5, nrow = J, ncol = J)
+
+#set coefficient matrix for simulating data with covariates (make sure to include intercept coefficient in here as well!)
+beta <- matrix(sample(c(-0.1, 0, 0.5, 0.5), J*(p+1), replace = TRUE), nrow = p+1, ncol = J)
+
+#set VAR(1) noise covariance(Sigma), VAR coefficient matrix (A) for various settings settings
+smallA <-  matrix(sparseMatrix(i = 1:J, j = sample(1:J, J), x = 0.1, dims = c(J,J)), J, J)
+largeA <- matrix(sparseMatrix(i = 1:J, j = sample(1:J, J), x = 0.9, dims = c(J,J)), J, J)
+smallSigma <- diag(0.1, nrow = J, ncol = J)
+largeSigma <- diag(1, nrow = J, ncol = J)
+
+# Sigma_Z <- matrix(solve(diag(1, J*J, J*J) - kronecker(A, A)) %*% c(Sigma),
+#        nrow = J, ncol = J)
+
+
+#Set mean offset in parameters of Poisson distribution for observed values
+mu <- matrix(rep(0.5, J), nrow = J)
+
+#setup for simulation
+nsim <- 10 #number of sims
+lambda_N <- 100 #number of lambda values
+lambda_min_ratio <- 0.01 # for defining the minimum lambda
+
+
+#lists to store samples over simulations and MoM estimates (non-penalized and penalized) throughout sims for different settings of: small A and small noise, small A and large noise, large A and small noise, large A and large noise
+
+sim_settings_base <- list("n" = n,
+                     "m" = m,
+                     "J" = J,
+                     "nsim" = nsim,
+                     "mu" = mu, 
+                     "A" = matrix(NA, J, J),
+                     "Sigma" = matrix(NA, J, J))
+
+sim_settings_all <- list("smallA_smallSigma" = sim_settings_base,
+                         "smallA_largeSigma" = sim_settings_base,
+                         "largeA_smallSigma" = sim_settings_base,
+                         "largeA_largeSigma" = sim_settings_base)
+
+# setting up lists to store all information across simulations
+# sim_results_all <- list("smallA_smallSigma" = list("sim_settings" = sim_settings,
+#                                                    "sample_list" = vector(mode = "list"),
+#                                                    "mom_nopen_list" = vector(mode = "list"),
+#                                                    "mom_pen_list" = vector(mode = "list")),
+#                         "smallA_largeSigma" = list("sim_settings" = sim_settings,
+#                                                    "sample_list" = vector(mode = "list"),
+#                                                    "mom_nopen_list" = vector(mode = "list"),
+#                                                    "mom_pen_list" = vector(mode = "list")),
+#                         "largeA_smallSigma" = list("sim_settings" = sim_settings,
+#                                                    "sample_list" = vector(mode = "list"),
+#                                                    "mom_nopen_list" = vector(mode = "list"),
+#                                                    "mom_pen_list" = vector(mode = "list")),
+#                         "largeA_largeSigma" = list("sim_settings" = sim_settings,
+#                                                    "sample_list" = vector(mode = "list"),
+#                                                    "mom_nopen_list" = vector(mode = "list"),
+#                                                    "mom_pen_list" = vector(mode = "list")))
+
+
+sim_results_all <- list("smallA_smallSigma" = list("A" = "small",
+                                                   "Sigma" = "small",
+                                                   "mom_nopen_support" = matrix(0, nrow = nsim, ncol = J^2),
+                                                   "mom_pen_oracle_lambda" = rep(NA, nsim),
+                                                   "mom_pen_oracle_support" = matrix(0, nrow = nsim, ncol = J^2),
+                                                   "mom_pen_selected_lambda" = rep(NA, nsim),
+                                                   "mom_pen_selected_support" = matrix(0, nrow = nsim, ncol = J^2)),
+                        "smallA_largeSigma" = list("A" = "small",
+                                                   "Sigma" = "large",
+                                                   "mom_nopen_support" = matrix(0, nrow = nsim, ncol = J^2),
+                                                   "mom_pen_oracle_lambda" = rep(NA, nsim),
+                                                   "mom_pen_oracle_support" = matrix(0, nrow = nsim, ncol = J^2),
+                                                   "mom_pen_selected_lambda" = rep(NA, nsim),
+                                                   "mom_pen_selected_support" = matrix(0, nrow = nsim, ncol = J^2)),
+                        "largeA_smallSigma" = list("A" = "large",
+                                                   "Sigma" = "small",
+                                                   "mom_nopen_support" = matrix(0, nrow = nsim, ncol = J^2),
+                                                   "mom_pen_oracle_lambda" = rep(NA, nsim),
+                                                   "mom_pen_oracle_support" = matrix(0, nrow = nsim, ncol = J^2),
+                                                   "mom_pen_selected_lambda" = rep(NA, nsim),
+                                                   "mom_pen_selected_support" = matrix(0, nrow = nsim, ncol = J^2)),
+                        "largeA_largeSigma" = list("A" = "large",
+                                                   "Sigma" = "large",
+                                                   "mom_nopen_support" = matrix(0, nrow = nsim, ncol = J^2),
+                                                   "mom_pen_oracle_lambda" = rep(NA, nsim),
+                                                   "mom_pen_oracle_support" = matrix(0, nrow = nsim, ncol = J^2),
+                                                   "mom_pen_selected_lambda" = rep(NA, nsim),
+                                                   "mom_pen_selected_support" = matrix(0, nrow = nsim, ncol = J^2))
+)
+
+
+for (i in 1:length(sim_settings_all)) {
+  
+  #get setting description
+  sim_setting_name <- names(sim_settings_all)[i]
+  
+  #set A and Sigma values accordingly based on setting descriptor
+  if (str_detect(sim_setting_name, "smallA")) {
+    sim_settings_all[[i]]$A <- smallA
+  } else {
+    sim_settings_all[[i]]$A  <- largeA
+  }
+  
+  if (str_detect(sim_setting_name, "smallSigma")) {
+    sim_settings_all[[i]]$Sigma <- smallSigma
+  } else {
+    sim_settings_all[[i]]$Sigma <- largeSigma
+  }
+
+}
+
+
+#for saving sim settings
+# sim_settings <- list("n" = n,
+#                      "m" = m,
+#                      "J" = J,
+#                      "nsim" = nsim,
+#                      "mu" = mu,
+#                      "Sigma" = list("small" = smallSigma, "large" = largeSigma),
+#                      "A" = list("small" = smallA, "large" = largeA))
+```
+
+
+-   Number of simulation runs: `r nsim`
+
+```{r run-sims}
+for (s in 1:length(sim_settings_all)) {
+  
+  #set up simulation parameters for current setting
+  current_setting <- sim_settings_all[[s]]
+  A <- current_setting$A
+  Sigma <- current_setting$Sigma
+  print(paste0("Current Setting: ", names(sim_results_all)[s]))
+  true_supp <- which(A != 0)
+  true_supp_n <- length(true_supp)
+  true_nonsupp_n <- J^2 - true_supp_n
+  
+  #run simulation under current setting
+  for (i in 1:nsim) {
+    
+    if (i %% 10 == 0) {print(i)}
+    #generate sample data
+    temp_sample <- sim_data(n, m, J, Sigma, A, mu)
+    
+    
+    #compute non-penalized MoM estimators and store result of support
+    mom_nopen_est <- mom_estimator(temp_sample$Y, penalty = FALSE)
+    sim_results_all$smallA_smallSigma$mom_nopen_support[i,which(mom_nopen_est$A != 0)] <- 1
+    
+    
+    #compute penalized MoM estimators and store result
+    #setup up lambda grid and then select lambda
+    lambda_max <- 2 * max(abs(mom_nopen_est$P %*% t(mom_nopen_est$Sigma_Z))) #this lambda guarantees 0 selected edges
+    lambda_grid <- exp(seq(log(lambda_max), log(lambda_max * lambda_min_ratio), length.out = lambda_N))
+    temp_results <- data.table("tpr" = rep(NA, lambda_N),
+                               "fpr" = rep(NA, lambda_N),
+                               "edges" = rep(NA, lambda_N),
+                               "bic" = rep(NA, lambda_N))
+    mse_term <- rep(NA, lambda_N)
+    temp_support <- matrix(0, lambda_N, J^2)
+    
+    for (j in 1:lambda_N) {
+      #get current value of lambda
+      l <- lambda_grid[j] 
+      
+      #fit penalized estimate
+      mom_pen_est <- mom_estimator(temp_sample$Y, penalty = TRUE, lambda = l)$A
+      Sigma_Z_est <- mom_nopen_est$Sigma_Z
+      P_est <- mom_nopen_est$P
+      A_est_supp <- which(mom_pen_est != 0)
+      temp_results$tpr[j] <- length(intersect(A_est_supp, true_supp))/(true_supp_n)
+      temp_results$fpr[j] <- length(setdiff(A_est_supp, true_supp))/(true_nonsupp_n)
+      temp_results$edges[j] <- length(A_est_supp)
+      temp_support[j, A_est_supp] <- 1
+      
+     
+      
+      #refit based on selected edges of A
+      if (length(A_est_supp) > 0) {
+        K <- kronecker(t(Sigma_Z_est), diag(1, J))  # (J^2) x (J^2)
+        b <- as.vector(P_est)                          
+        
+        Ks = as.matrix(K[, supp])
+        fit = lm.fit(x = Ks, y = b)
+        a_hat = fit$coefficients
+        
+        Avec = numeric(J^2)
+        Avec[supp] = a_hat
+        A_refit = matrix(Avec, nrow = J, ncol = J)  
+        A_est <- A_refit
+      } else {
+        A_est <- matrix(0, J, J)
+      }
+      
+      #compute criteria for each lambda
+      mse_term[j] <- n_lags*norm(A_est %*% Sigma_Z_est - P_est, type = "F") + log(n_lags)*length(A_est_supp)
+      
+    }
+    
+    #compute bic
+    temp_results$bic <- n_lags*mse_term + log(n_lags)*temp_results$edges
+    
+    #store oracle lambda support (empirically best lambda) and selected lambda support
+    oracle_lambda_idx <- which.min(temp_results$edges[which(temp_results$tpr == max(temp_results$tpr))])
+    selected_lambda_idx <- which.min(temp_results$bic)
+    sim_results_all[[s]]$mom_pen_oracle_lambda[i] <- lambda_grid[oracle_lambda_idx]
+    sim_results_all[[s]]$mom_pen_oracle_support[i,] <- temp_support[oracle_lambda_idx,]
+    sim_results_all[[s]]$mom_pen_selected_lambda[i] <- lambda_grid[selected_lambda_idx]
+    sim_results_all[[s]]$mom_pen_selected_support[i,] <- temp_support[selected_lambda_idx,]
+  }
+}
+
+```
+
+```{r summarise-results-tables-new}
+#make table of results
+
+```
+
+```{r visualize-results-new}
+
+```
+
+
+
+
+```{r summarise-results-tables-old}
+#report compute metrics (fpr, tpr) across sims for both estimators across sim settings
+support_recovery_results <- list("smallA_smallSigma" = list(mode = "vector"),
+                                 "smallA_largeSigma" = list(mode = "vector"),
+                                 "largeA_smallSigma" = list(mode = "vector"),
+                                 "largeA_largeSigma" = list(mode = "vector"))
+
+for (s in 1:length(support_recovery_results)) {
+  #get support of true A
+  A <- sim_results_all[[s]]$sim_settings$A
+  support_recovery_results[[s]]$A_true_support <- A_true_support <- which(A != 0)
+  
+  #get support recovery for nonpenalized A
+  support_recovery_results[[s]]$est_support_nopen <- est_support_nopen <- lapply(sim_results_all[[s]]$mom_nopen_list, function(x) {which(x$A != 0)})
+  
+  #figure out optimal lambda for each iteration, then record support recovery
+  #also record support recovery for the true lambda that gives best tpr
+  support_recovery_results[[s]]$oracle_lambda
+  support_recovery_results[[s]]$est_support_pen <- est_support_pen <- lapply(sim_results_all[[s]]$mom_pen_list, function(x) {which(x$A != 0)})
+  support_recovery_results[[s]]$A_support_metrics <- A_support_metrics <- data.frame(sim = 1:nsim,
+                                  edges_nopen = sapply(est_support_nopen, function (x) {length(x)}),
+                                  edges_pen = sapply(est_support_pen, function (x) {length(x)}),
+                                  tpr_nopen = sapply(est_support_nopen, function (x) {length(intersect(x, A_true_support))/length(A_true_support)}),
+                                  tpr_pen = sapply(est_support_pen, function (x) {length(intersect(x, A_true_support))/length(A_true_support)}),
+                                  fpr_nopen = sapply(est_support_nopen, function (x) {ifelse(length(x) > 0, length(setdiff(x, A_true_support))/(J^2 - length(A_true_support)),0)}),
+                                  fpr_pen = sapply(est_support_pen, function (x) {ifelse(length(x) > 0, length(setdiff(x, A_true_support))/(J^2 - length(A_true_support)), 0)}))
+  
+  support_recovery_results[[s]]$A_support_results_clean <- A_support_metrics %>% 
+    pivot_longer(contains("_"), 
+                 names_to = c("metric", "estimator"),
+                 names_sep = c("_")) %>%
+    pivot_wider(names_from = metric, values_from = value) %>%
+    mutate("A" = str_extract(names(sim_results_all)[s], "(.*)(?=A)"),
+           "Sigma" = str_extract(names(sim_results_all)[s], "(?<=_)(.*)(?=Sigma)"))
+}
+```
+
+```{r visualize results, eval = TRUE}
+#visualize J=5 results
+load("../Simulation Results/MoM (Penalized vs Non-penalized) Simulations/mom_sims_J5_040226.Rdata")
+n <- sim_results_all$smallA_smallSigma$sim_settings$n
+m <- sim_results_all$smallA_smallSigma$sim_settings$m
+J <- sim_results_all$smallA_smallSigma$sim_settings$J
+
+#make one data frame with all results across all settings
+A_support_results_full <- do.call(rbind, lapply(support_recovery_results, function (x) {x$A_support_results_clean}))
+
+#visualize edges and tpr in facet grid across the different settings
+A_support_results_full %>% ggplot(mapping = aes(x = edges, y = tpr, color = estimator)) +
+  geom_point() +
+  facet_grid(rows = vars(A), cols = vars(Sigma), labeller = "label_both") +
+  labs(title = paste0("Results from MoM sims with n = ", n, ", m = ", m, ", J = ", J)) +
+  theme_bw()
+
+#visualize J=10 results
+load("../Simulation Results/MoM (Penalized vs Non-penalized) Simulations/mom_sims_J10_040226.Rdata")
+n <- sim_results_all$smallA_smallSigma$sim_settings$n
+m <- sim_results_all$smallA_smallSigma$sim_settings$m
+J <- sim_results_all$smallA_smallSigma$sim_settings$J
+
+#make one data frame with all results across all settings
+A_support_results_full <- do.call(rbind, lapply(support_recovery_results, function (x) {x$A_support_results_clean}))
+
+#visualize edges and tpr in facet grid across the different settings
+A_support_results_full %>% ggplot(mapping = aes(x = edges, y = tpr, color = estimator)) +
+  geom_point() +
+  facet_grid(rows = vars(A), cols = vars(Sigma), labeller = "label_both") +
+  labs(title = paste0("Results from MoM sims with n = ", n, ", m = ", m, ", J = ", J)) +
+  theme_bw()
+``` 
+
+
+

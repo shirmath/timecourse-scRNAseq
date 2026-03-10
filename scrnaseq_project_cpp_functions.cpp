@@ -582,7 +582,7 @@ arma::cube S_grad2(
   arma::cube init_S(m, J, n);
   std::copy(S_vec.begin(), S_vec.end(), init_S.begin()); 
   const arma::mat mu = Rcpp::as<arma::mat>(params["mu"]);     // true mean (p)
-  const auto init_M = Rcpp::as<arma::cube>(params["M"]);     // variational approximation variances (m,J,n)
+  const auto init_M = Rcpp::as<arma::cube>(params["M"]);     // variational approximation means (m,J,n)
   const auto Sigma = Rcpp::as<arma::mat>(params["Sigma"]); // covinv for particular VAR instance (p,p) 
   const auto A = Rcpp::as<arma::mat>(params["A"]); // VAR(1) coefficient matrix (p,p)
   

@@ -61,7 +61,7 @@ Sigma_Z <- matrix(solve(diag(1, J*J, J*J) - kronecker(A, A)) %*% c(Sigma),
 mu <- matrix(rep(0.5, J), nrow = J)
 
 #setup for simulation
-nsim <- 5
+nsim <- 100
 elbo2 <- TRUE #determine if ELBO based on likelihood conditional on first timepoint or not will be used (will be used if TRUE)
 penalty <- TRUE #determine whether to use penalized estimators or not
 if (elbo2) {full_params <- c("mu", "Sigma", "A")} else { full_params <- c("mu", "Sigma_Z", "A") }
@@ -91,11 +91,6 @@ sim_A_results <- array(1:(2*J^2*nsim), dim = c(2,J, J,nsim),
                                              "row" = 1:J,
                                              "column" = 1:J,
                                              "iter" = 1:nsim))
-
-A_max_eig_mod <- rep(NA, nsim)
-
-sim_Sigma_list <- vector(mode = "list")
-sim_Sigma_pd <- rep(NA, nsim)
 
 sim_M_list <- vector(mode = "list")
 sim_S_list <- vector(mode = "list")
@@ -166,9 +161,9 @@ for (i in 1:nsim) {
   } else {
     #compute warm start values with non-penalized MoM estimates
     mom_estimates_nopen <-  mom_estimator(temp_sample$Y, penalty = FALSE)
-    A_hat_vec <- c(mom_estimates_nopen$A_hat)
-    mu_hat <- mom_estimates_nopen$mu_hat
-    Sigma_hat_vec <- c(mom_estimates_nopen$Sigma_hat)
+    A_hat_vec <- c(mom_estimates_nopen$A)
+    mu_hat <- mom_estimates_nopen$mu
+    Sigma_hat_vec <- c(mom_estimates_nopen$Sigma)
 
     #not getting fixed M and S first
     vi_estimates <- vector(mode = "list")
@@ -189,7 +184,7 @@ for (i in 1:nsim) {
                         skip_coords = skip_params)
     }
 
-    vi_est <- vi_estimator2(temp_sample,
+    vi_est_pen <- vi_estimator2(temp_sample$Y,
                         init_mu = mu_hat,
                         init_Sigma = Sigma_hat_vec,
                         init_A = A_hat_vec,
@@ -197,8 +192,8 @@ for (i in 1:nsim) {
                         init_S = rep(1, m*J*n),
                         optim_method = "nloptr",
                         max.iter = 100,
-                        penalty = penalty,
-                        lambda = 1e-2,
+                        penalty = TRUE,
+                        lambda = 100,
                         verbose = FALSE,
                         skip_coords = skip_params)
 
@@ -485,7 +480,7 @@ for (i in 1:nsim) {
   sim_sample_list[[i]] <- temp_sample
   
   #COMPUTE MoM ESTIMATORS and store result
-  lambda <- seq(1e-3,1, length.out = 1000)
+  lambda <- seq(1e-3,1, length.out = 100)
   mom_estimates <- vector(mode = "list")
   
   for (l in 1:length(lambda)) {
@@ -493,6 +488,10 @@ for (i in 1:nsim) {
   }
   sim_mom_list[[i]] <- list("lambda" = lambda, "estimates" = mom_estimates)
 }
+
+```
+
+```{r penalized-mom-sims}
 
 ```
 
@@ -592,22 +591,22 @@ for (i in 1:nsim) {
     #compute model selection criteria for current ess type
     for (crit in criteria_types) {
       if (crit == "mse") {
-        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {norm(x$A_hat - x$P %*% solve(x$Sigma_Z_hat), type = "F")})
+        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {norm(x$A - x$P %*% solve(x$Sigma_Z), type = "F")})
       }
       if (crit == "bic") {
-        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {N_eff*norm(x$A_hat - x$P %*% solve(x$Sigma_Z_hat), type = "F") + log(N_eff)*sum(x$A_hat != 0)})
+        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {N_eff*norm(x$A - x$P %*% solve(x$Sigma_Z), type = "F") + log(N_eff)*sum(x$A != 0)})
       }
       
       if (crit == "ebic") {
-        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {N_eff*norm(x$A_hat - x$P %*% solve(x$Sigma_Z_hat), type = "F") + log(N_eff)*sum(x$A_hat != 0) + log(choose(J^2, sum(x$A_hat != 0)))})
+        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {N_eff*norm(x$A - x$P %*% solve(x$Sigma_Z), type = "F") + log(N_eff)*sum(x$A != 0) + log(choose(J^2, sum(x$A != 0)))})
       }
       
       if (crit == "bic2") {
-        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {N_eff*norm(x$A_hat %*% x$Sigma_Z_hat - x$P, type = "F") + log(N_eff)*sum(x$A_hat != 0)})
+        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {N_eff*norm(x$A %*% x$Sigma_Z - x$P, type = "F") + log(N_eff)*sum(x$A != 0)})
       }
       
       if (crit == "ebic2") {
-        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {N_eff*norm(x$A_hat %*% x$Sigma_Z_hat - x$P, type = "F") + log(N_eff)*sum(x$A_hat != 0) + log(choose(J^2, sum(x$A_hat != 0)))})
+        model_selection_results[i, , ess_type, crit] <- sapply(sim_mom_list[[i]]$estimates, function(x) {N_eff*norm(x$A %*% x$Sigma_Z - x$P, type = "F") + log(N_eff)*sum(x$A != 0) + log(choose(J^2, sum(x$A != 0)))})
       }
       
     }
@@ -772,3 +771,45 @@ criteria_comparison_results %>% mutate(minimal_edges_diff = num_edges_criteria -
   theme_bw()
   
 ```
+
+```{r cv-code}
+
+#test out cv code
+sample_data <- sim_data(n, m, J, Sigma, A, mu)
+lambdas <- seq(0.05,1,length.out = 20)
+mom_cv_results <- cv_metrics(sample_data$Y, estimator = "mom", lambdas = lambdas, K = 5)
+vi_cv_results <- cv_metrics(sample_data$Y, estimator = "vi", lambdas = lambdas, K = 5)
+
+#testing out if penalized vi estimator works
+init_params <- mom_estimator(sample_data$Y, penalty = FALSE)
+init_params$S <- array(1, dim = c(m, J, n))
+init_params$M <- array(0, dim = c(m, J, n))
+vi2_init_est <- vi_estimator2(sample_data$Y, 
+                                   init_mu = init_params$mu, 
+                                   init_M = init_params$M, 
+                                   init_S = init_params$S, 
+                                   init_Sigma = init_params$Sigma, 
+                                   init_A = init_params$A, 
+                                   optim_method = "optim", 
+                                   max.iter = 100, 
+                                   tol = 1e-4, 
+                                   verbose = TRUE, 
+                                   skip_coords = c("mu", "Sigma", "A"), 
+                                   penalty = FALSE, 
+                                   lambda = 1)
+
+vi2_est <- vi_estimator2(sample_data$Y, 
+                                   init_mu = init_params$mu, 
+                                   init_M = init_params$M, 
+                                   init_S = init_params$S, 
+                                   init_Sigma = init_params$Sigma, 
+                                   init_A = init_params$A, 
+                                   optim_method = "optim", 
+                                   max.iter = 100, 
+                                   tol = 1e-4, 
+                                   verbose = TRUE, 
+                                   skip_coords = NA, 
+                                   penalty = FALSE, 
+                                   lambda = 1)
+```
+

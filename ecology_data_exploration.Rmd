@@ -10,7 +10,6 @@ knitr::opts_chunk$set(echo = FALSE, eval = TRUE, warning = FALSE, message = FALS
 
 ```{r load-packages, eval = TRUE}
 #load packages
-library(tidyverse)
 library(Matrix)
 library(MASS)
 library(Rcpp)
@@ -19,11 +18,316 @@ library(nloptr)
 library(numDeriv)
 library(PLNmodels)
 library(patchwork)
+library(tidyverse)
+```
+
+```{r load-functions}
+#import functions
+source("scrnaseq_project_functions.R")
+sourceCpp('scrnaseq_project_cpp_functions.cpp')
 ```
 
 ```{r load-data}
-all_taxa_df <- read.csv("Datasets/TREAM_allTaxa.csv")
-sitelevel_df <- read.csv("Datasets/TREAM_siteLevel.csv")
-siteyearlevel_df <- read.csv("Datasets/TREAM_siteYearLevel.csv")
+#raw abundance info for each taxa across site and years
+all_taxa_raw <- read.csv("../Data/TREAM_allTaxa.csv")
+all_taxa_complete <- all_taxa_raw[complete.cases(all_taxa_raw),]
+all_taxa_incomplete <- all_taxa_raw[1-complete.cases(all_taxa_raw),]
+#summary measures across full time series for each site
+sitelevel_raw <- read.csv("../Data/TREAM_siteLevel.csv")
+
+#summary measures for each year and site combination
+siteyearlevel_raw <- read.csv("../Data/TREAM_siteYearLevel.csv")
 ```
+
+```{r visualize-data}
+# total number of unique sampling sites across all studies
+n_unique_sites <- length(unique(all_taxa_raw$site_id))
+
+# summarise number of sites per study
+project_summary <- sitelevel_raw %>%
+  group_by(project_number) %>%
+  summarise(num_studies = length(unique(study_id)),
+            num_sites = n())
+
+#data for specific projects
+project_2 <- sitelevel_raw %>%
+  filter(project_number == 2)
+
+project_2_sites <- unique(project_2$site_id)
+
+all_taxa_project2 <- all_taxa_raw %>%
+  filter(site_id %in% project_2_sites)
+
+#summary of number of different families present (since not every organism as genus or more narrow specification, can analyze at level of Family)
+project_2_family_summary <- all_taxa_project2 %>%
+  group_by(Family) %>%
+  summarise(n = n())
+
+project_2_group_summary <- all_taxa_project2 %>%
+  group_by(Group) %>%
+  summarise(n = n())
+
+#trying to understand mapping of taxon id to specific phylogenies
+project2_taxa_aug <- all_taxa_project2 %>%
+  mutate(phylogeny = paste0(Group, Family, Genus.group, species))
+
+n_taxon_id_project2 <- length(unique(project2_taxa_aug$taxon_id))
+n_phylogeny_project2 <- length(unique(project2_taxa_aug$phylogeny))
+
+distinct_project2_taxa_phylogeny <- project2_taxa_aug %>%
+  dplyr::select(taxon_id, phylogeny) %>%
+  distinct()
+
+#figure out which phylogenies are duplicated in project2
+dup_phylogeny <- distinct_project2_taxa_phylogeny %>% 
+  group_by(phylogeny) %>%
+  summarise(count = n()) %>%
+  filter(count > 1) %>%
+  dplyr::select(phylogeny) %>%
+  pull()
+
+dup_taxa_phylogeny <- distinct_project2_taxa_phylogeny %>%
+  filter(phylogeny %in% dup_phylogeny)
+
+dup_phylogeny_taxa_obs <-  project2_taxa_aug %>%
+  filter(phylogeny %in% dup_phylogeny)
+
+#get number of timepoints in project2
+project2_taxa_dates <- all_taxa_project2 %>%
+  mutate(obs_date = as.Date(paste(month, day, year, sep = "/"), format = "%m/%d/%Y")) %>%
+  arrange(obs_date)
+
+project2_time_summary <- project2_taxa_dates %>%
+  group_by(obs_date) %>%
+  summarise(n_obs = n())
+
+project2_sitetime_summary <- project2_taxa_dates %>%
+  group_by(site_id, obs_date) %>%
+  summarise(n_obs = n())
+
+project2_site_summary <- project2_taxa_dates %>%
+  group_by(site_id) %>%
+  summarise(num_timepoints = length(unique(obs_date)))
+
+project2_taxa_summary <- project2_taxa_dates %>%
+  group_by(taxon_id) %>%
+  summarise(n_obs = n())
+
+project2_sites <- unique(project2_taxa_dates$site_id)
+project2_taxa <- unique(project2_taxa_dates$taxon_id)
+project2_times <- unique(project2_taxa_dates$obs_date)
+
+project2_ntime <- length(unique(project2_taxa_dates$obs_date))
+project2_nsites <- length(unique(project2_taxa_dates$site_id))
+project2_ntaxa <- length(unique(project2_taxa_dates$taxon_id))
+
+project2_time_lags <- unique(project2_taxa_dates$obs_date)[2:project2_ntime] - unique(project2_taxa_dates$obs_date)[1:(project2_ntime-1)]
+
+#try to get project 2 data into format you have for modeling functions
+project2_array_info <- data.frame(site_id = rep(project2_sites, project2_ntime*project2_ntaxa),
+                                  obs_date = rep(project2_times, each = project2_nsites*project2_ntaxa),
+                                  taxon_id = rep(project2_taxa, project2_ntime*project2_nsites))
+
+project2_subset_info <- project2_taxa_dates %>%
+  dplyr::select(taxon_id, site_id, obs_date, abundance)
+
+project2_array_info_aug <- left_join(project2_array_info, project2_subset_info)
+
+project2_array_info_nonmissing <- project2_array_info_aug %>%
+  filter(!is.na(abundance))
+
+project2_array <- array(NA, dim = c(project2_ntime, project2_ntaxa, project2_nsites),
+                        dimnames = list("time" = unique(as.character(project2_taxa_dates$obs_date)),
+                                        "taxa" = unique(project2_taxa_dates$taxon_id),
+                                        "site" = unique(project2_taxa_dates$site_id)))
+
+for (taxa in unique(project2_taxa_dates$taxon_id)) {
+  print(taxa)
+  project2_array[,taxa,] <- project2_array_info_aug %>% 
+    filter(taxon_id == taxa) %>%
+    pivot_wider(names_from = site_id, values_from = abundance) %>%
+    dplyr::select(dimnames(project2_array)$site) %>%
+    as.matrix()
+}
+
+```
+
+
+```{r missingness-in-obs}
+n_orders <- length(unique(all_taxa_raw$Group))
+n_sites <- length(unique(all_taxa_raw$site_id))
+n_years <- length(unique(all_taxa_raw$year))
+```
+
+```{r data-vis}
+#get a sense of how many years of data is present across the sites
+sitelevel_raw %>% ggplot(mapping = aes(x = Sampling_years)) +
+  geom_histogram() +
+  labs(title = "Distribution of total number of years sampled across sites", 
+       x = "total number of years sampled", 
+       y = "number of sites") +
+  theme_bw()
+
+#get a sense of frequency of sampling across the sites
+site_sampling_freq <- all_taxa_raw %>% group_by(site_id, year) %>%
+  summarise(days_sampled = n()) %>%
+  group_by(site_id) %>%
+  summarise(avg_freq = sum(days_sampled)/n())
+
+site_sampling_freq %>% ggplot(mapping = aes(x = avg_freq)) +
+  geom_histogram() +
+  labs(title = "Distribution of average number of days per year for samples across sites",
+       x = "days per year that samples were collected",
+       y = "number of sites") +
+  theme_bw()
+
+#get sense of what years are sampled for each site
+years_sampled_summary <- sitelevel_raw %>%  group_by(Starting_year, Ending_year) %>%
+  summarise(n_sites = n()) %>%
+  drop_na()
+
+#visualize how many sites are present in each year of sampling
+sites_per_year <- siteyearlevel_raw %>% group_by(year) %>%
+  summarise(nsites_w_sampling = sum(!is.na(site_id_wMissing)),
+            nsites_missing_sampling = sum(is.na(site_id_wMissing)),
+            nsites_total = length(unique(site_id))) %>%
+  pivot_longer(cols = -c("year"), names_to = "site_descriptor", values_to = "count")
+
+sites_per_year %>% ggplot(mapping = aes(x = year, y = count)) +
+  geom_col() +
+  facet_wrap(~site_descriptor) +
+  labs(title = "High-level summary of missingness in sampling across years",
+       x = "year",
+       y = "number of sites") +
+  theme_bw()
+```
+
+```{r project-summaries}
+# summarise number of sites per study
+project_summary <- sitelevel_raw %>%
+  group_by(project_number) %>%
+  summarise(num_studies = length(unique(study_id)),
+            num_sites = n())
+
+#get which projects have at least 100 sites
+largest_projects <- project_summary %>% 
+  filter(num_sites >= 100)
+
+largest_projects_sampling <- sitelevel_raw %>%
+  filter(project_number %in% largest_projects$project_number) %>%
+  group_by(project_number, unit, sampling_method_long) %>%
+  summarise(n_sites = n())
+
+
+#get site id's for the sites present in the largest projects
+largest_projects_sites <- sitelevel_raw %>%
+  filter(project_number %in% largest_projects$project_number) %>%
+  dplyr::select(project_number, site_id)
+
+#visualize how many sites are present in each year of sampling, faceted by project
+large_projects_sites_per_year <- siteyearlevel_raw %>% 
+  filter(site_id %in% largest_projects_sites$site_id) %>%
+  left_join(largest_projects_sites, by = join_by(site_id == site_id)) %>%
+  group_by(project_number, year) %>%
+  summarise(nsites_w_sampling = sum(!is.na(site_id_wMissing)),
+            nsites_missing_sampling = sum(is.na(site_id_wMissing)),
+            nsites_total = length(unique(site_id))) %>%
+  pivot_longer(cols = -c("year", "project_number"), names_to = "site_descriptor", values_to = "count")
+
+large_projects_sites_per_year %>% ggplot(mapping = aes(x = year, y = count)) +
+  geom_col() +
+  facet_grid(rows = vars(project_number), cols = vars(site_descriptor)) +
+  labs(title = "High-level summary of missingness in sampling across years for projects with most sites",
+       x = "year",
+       y = "number of sites") +
+  theme_bw()
+
+```
+
+
+
+```{r family-year-analysis}
+n_orders <- length(unique(all_taxa_raw$Group))
+n_sites <- length(unique(all_taxa_raw$site_id))
+n_timepoints <- length(unique(all_taxa_raw$year))
+
+#at the level of order of organisms, get sense of how many sites they are present in
+order_summary <- all_taxa_raw %>%
+  group_by(Group) %>%
+  summarise(num_sites = length(unique(site_id)),
+            num_years = length(unique(year)))
+
+#num species found at each site
+order_year_aggregate_data <- all_taxa_raw %>%
+  group_by(year, Group, site_id) %>%
+  summarise(abundance = sum(abundance)) %>%
+  ungroup() %>%
+  tidyr::complete(year, Group, site_id)
+
+#create abundance array across all site, year, and family combos
+real_data_array <- array(NA, dim = c(n_timepoints, n_orders, n_sites), 
+                         dimnames = list("year" = sort(unique(order_year_aggregate_data$year)),
+                                         "group" = sort(unique(order_year_aggregate_data$Group)),
+                                         "site" = sort(unique(order_year_aggregate_data$site_id))))
+
+for (i in 1:nrow(order_year_aggregate_data)) {
+  temp_year <- paste0(order_year_aggregate_data$year[i])
+  temp_group <- paste0(order_year_aggregate_data$Group[i])
+  temp_site <- paste0(order_year_aggregate_data$site_id[i])
+  count <- order_year_aggregate_data$site_id[i]
+  
+  real_data_array[temp_year, temp_group, temp_site] <- count
+}
+
+
+
+```
+
+
+```{r project-16-data-formatting}
+#get data for project 16
+project_16 <- sitelevel_raw %>%
+  filter(project_number == 16)
+
+project_16_sites <- unique(project_16$site_id)
+
+all_taxa_project16 <- all_taxa_raw %>%
+  filter(site_id %in% project_16_sites)
+
+#num species found at each site
+order_year_aggregate_project16 <- all_taxa_project16 %>%
+  group_by(year, Group, site_id) %>%
+  summarise(abundance = sum(abundance)) %>%
+  ungroup() %>%
+  tidyr::complete(year, Group, site_id)
+
+project16_missing_summary <- order_year_aggregate_project16 %>%
+  group_by(year, site_id) %>%
+  summarise(missing_groups = sum(is.na(abundance)))
+
+site_years_all_missing <- sum(project16_missing_summary$missing_groups == n_orders)
+
+#get number timepoints, orders, sites in project16
+n_timepoints <- length(unique(order_year_aggregate_project16$year))
+n_orders <- length(unique(order_year_aggregate_project16$Group))
+n_sites <- length(unique(order_year_aggregate_project16$site_id))
+
+#create abundance array across all site, year, and family combos
+project16_data_array <- array(NA, dim = c(n_timepoints, n_orders, n_sites), 
+                         dimnames = list("year" = sort(unique(order_year_aggregate_project16$year)),
+                                         "group" = sort(unique(order_year_aggregate_project16$Group)),
+                                         "site" = sort(unique(order_year_aggregate_project16$site_id))))
+
+for (i in 1:nrow(order_year_aggregate_project16)) {
+  temp_year <- paste0(order_year_aggregate_project16$year[i])
+  temp_group <- paste0(order_year_aggregate_project16$Group[i])
+  temp_site <- paste0(order_year_aggregate_project16$site_id[i])
+  count <- order_year_aggregate_project16$abundance[i]
+  
+  project16_data_array[temp_year, temp_group, temp_site] <- count
+}
+
+project16_mom <- mom_estimator(project16_data_array)
+```
+
 
