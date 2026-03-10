@@ -174,7 +174,7 @@ mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
 #FUNCTION TO COMPUTE MoM ESTIMATES (with covariates)
 # make sure X has dimension of m x p x n (i.e. make sure X does not already have intercept term in it, only the p covariates)
 #Offset O should have dimension m x n, so each column has all timepoints for that sample
-mom_estimator_cov <- function(Y, X, O) {
+mom_estimator_cov <- function(Y, X, O, penalty = FALSE) {
   #get dimensions of parameters
   n <- dim(Y)[3]
   m <- dim(Y)[1]
@@ -200,8 +200,8 @@ mom_estimator_cov <- function(Y, X, O) {
   
   #now, get exp(x^T %*% gamma for each time and sample combo) and add offset, then exponentiate to get rate est
   #the transposing and permutations in the below are just to make sure dimensions match up the way we want for later computations
-  rate_gamma_part <- aperm(apply(X, c(1,3), function (x) {t(c(1,x)) %*% gamma_mat}), c(2,1,3))
-  rate_est <- aperm(array(t(apply(rate_gamma_part, 2, function (x) {exp(x + log(O))})), dim = c(J, m, n)), c(2,1,3))
+  # rate_gamma_part <- aperm(apply(X, c(1,3), function (x) {t(c(1,x)) %*% gamma_mat}), c(2,1,3))
+  # rate_est <- aperm(array(t(apply(rate_gamma_part, 2, function (x) {exp(x + log(O))})), dim = c(J, m, n)), c(2,1,3))
   
   #ignoring offset estimator
   rate_est <- aperm(apply(X, c(1,3), function (x) {exp(t(c(1,x)) %*% gamma_mat)}), c(2,1,3))
