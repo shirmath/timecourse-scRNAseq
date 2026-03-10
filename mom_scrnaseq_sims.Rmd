@@ -43,7 +43,7 @@ m <- 5
 #set number of categories
 J <- 4
 #set number of covariates (excluding intercept)
-p <- 3
+p <- 2
 #compute number of lags
 n_lags <- n*(m-1)
 

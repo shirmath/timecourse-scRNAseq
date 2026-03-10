@@ -195,16 +195,18 @@ mom_estimator_cov <- function(Y, X, O, penalty = FALSE) {
   offset_vec <- c(O)
   
   for (j in 1:J) {
-    gamma_mat[,j] <- glm.fit(x = cov_mat, y = response_mat[,j], family = poisson())$coefficients
+    #use only observations with at least one category with a non-zero count in fitting model and include offset (in this case, offset is sum of all counts)
+    gamma_mat[,j] <- glm.fit(x = cov_mat, y = response_mat[,j], family = poisson(), offset = log(offset_vec))$coefficients
+    
   }
   
   #now, get exp(x^T %*% gamma for each time and sample combo) and add offset, then exponentiate to get rate est
   #the transposing and permutations in the below are just to make sure dimensions match up the way we want for later computations
-  # rate_gamma_part <- aperm(apply(X, c(1,3), function (x) {t(c(1,x)) %*% gamma_mat}), c(2,1,3))
-  # rate_est <- aperm(array(t(apply(rate_gamma_part, 2, function (x) {exp(x + log(O))})), dim = c(J, m, n)), c(2,1,3))
+  rate_gamma_part <- aperm(apply(X, c(1,3), function (x) {t(c(1,x)) %*% gamma_mat}), c(2,1,3))
+  rate_est <- aperm(array(t(apply(rate_gamma_part, 2, function (x) {exp(x + log(O))})), dim = c(J, m, n)), c(2,1,3))
   
   #ignoring offset estimator
-  rate_est <- aperm(apply(X, c(1,3), function (x) {exp(t(c(1,x)) %*% gamma_mat)}), c(2,1,3))
+  #rate_est <- aperm(apply(X, c(1,3), function (x) {exp(t(c(1,x)) %*% gamma_mat)}), c(2,1,3))
   
   #get Sigma_Z estimates
   Sigma_Z_est <- matrix(NA, J, J)
@@ -240,6 +242,7 @@ mom_estimator_cov <- function(Y, X, O, penalty = FALSE) {
   rm(Y_jk_mat)
   rm(rate_jk_mat)
   
+  #get A estimator
   A_est <- P %*% solve(Sigma_Z_est)
   
   #get estimator for Sigma using Sigma_Z and A estimators
