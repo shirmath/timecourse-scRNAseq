@@ -174,7 +174,7 @@ mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
 #FUNCTION TO COMPUTE MoM ESTIMATES (with covariates)
 # make sure X has dimension of m x p x n (i.e. make sure X does not already have intercept term in it, only the p covariates)
 #Offset O should have dimension m x n, so each column has all timepoints for that sample
-mom_estimator_cov <- function(Y, X, O, penalty = FALSE) {
+mom_estimator_cov <- function(Y, X, O, penalty = FALSE, lambda) {
   #get dimensions of parameters
   n <- dim(Y)[3]
   m <- dim(Y)[1]
@@ -196,18 +196,15 @@ mom_estimator_cov <- function(Y, X, O, penalty = FALSE) {
   
   for (j in 1:J) {
     #use only observations with at least one category with a non-zero count in fitting model and include offset (in this case, offset is sum of all counts)
-    gamma_mat[,j] <- glm.fit(x = cov_mat, y = response_mat[,j], family = poisson(), offset = log(offset_vec))$coefficients
+    gamma_mat[,j] <- glm.fit(x = cov_mat, y = response_mat[,j], family = poisson(), offset = offset_vec)$coefficients
     
   }
   
   #now, get exp(x^T %*% gamma for each time and sample combo) and add offset, then exponentiate to get rate est
   #the transposing and permutations in the below are just to make sure dimensions match up the way we want for later computations
   rate_gamma_part <- aperm(apply(X, c(1,3), function (x) {t(c(1,x)) %*% gamma_mat}), c(2,1,3))
-  rate_est <- aperm(array(t(apply(rate_gamma_part, 2, function (x) {exp(x + log(O))})), dim = c(J, m, n)), c(2,1,3))
-  
-  #ignoring offset estimator
-  #rate_est <- aperm(apply(X, c(1,3), function (x) {exp(t(c(1,x)) %*% gamma_mat)}), c(2,1,3))
-  
+  rate_est <- aperm(array(t(apply(rate_gamma_part, 2, function (x) {exp(x + O)})), dim = c(J, m, n)), c(2,1,3))
+
   #get Sigma_Z estimates
   Sigma_Z_est <- matrix(NA, J, J)
   diag(Sigma_Z_est) <- log(apply((Y^2 - Y)/(rate_est^2), 2, mean))
@@ -243,7 +240,12 @@ mom_estimator_cov <- function(Y, X, O, penalty = FALSE) {
   rm(rate_jk_mat)
   
   #get A estimator
-  A_est <- P %*% solve(Sigma_Z_est)
+  if (!penalty) {
+    A_est <- P %*% solve(Sigma_Z_est)
+  } else {
+    A_est <- mom_optim_A(A_init = NULL, Sigma_Z_est, P, lambda)
+  }
+ 
   
   #get estimator for Sigma using Sigma_Z and A estimators
   Sigma_est <- Sigma_Z_est - P %*% solve(Sigma_Z_est) %*% t(P)
@@ -1400,7 +1402,7 @@ vi_estimator2 <- function(Y, init_mu, init_M, init_S, init_Sigma, init_A,
   return(result)
 }
 
-
+#OPTIMIZATION FUNCTION FOR ESTIMATING A WITH PENALIZED MOM
 mom_optim_A <- function(A_init = NULL, Sigma_Z, P, lambda, tol = 1e-7, max.iter = 2000) {
   #get number of categories
   J <- nrow(P)
@@ -1435,6 +1437,78 @@ mom_optim_A <- function(A_init = NULL, Sigma_Z, P, lambda, tol = 1e-7, max.iter 
   }
   
   A_prev
+}
+
+#FUNCTION TO FIT MOM ESTIMATOR FOR A GRID OF LAMBDAS AND RETURN SELECTION CRITERIA AND ESTIMATES FOR EACH LAMBDA
+# Y should be array of observed counts with dimensions time x categories x samples
+# X should be array of covariates with dimensions time x number of covariates (no intercept) x samples (only needed if covariates = TRUE)
+# O should be offset matrix with dimensions time x samples (only needed if covariates = TRUE)
+# A_init should be initial value of A to be passed to A optimization function
+# Sigma_Z_est should be estimate of Sigma_Z from non-penalized MoM estimator
+# P_est should be estimate of the P matrix from non-penalized MoM estimator
+# lambda_grid should be grid of lambdas for which you want to fit penalized MoM estimator
+# covariates is boolean that indicates whether to use MoM estimator for model with covariates or the one for model without covariates
+mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_est, lambda_grid, covariates = FALSE) {
+  
+  #get quantities needed for later computations and storing results
+  m <- dim(Y)[1]
+  n <- dim(Y)[3]
+  J <- nrow(Sigma_Z_est)
+  lambda_N <- length(lambda_grid)
+  n_lags <- (m-1)*n
+  
+  #set up data frame for storing relevant high level results
+  selection_results <- data.table("lambda" = lambda_grid,
+                             "edges" = rep(NA, lambda_N),
+                             "bic" = rep(NA, lambda_N))
+  #set up array to store estimated A for each lambda
+  full_A_est <- array(0, dim = c(lambda_N, J, J),
+                                  dimnames = list("lambda" = lambda_grid,
+                                                  "row" = 1:J,
+                                                  "column" = 1:J))
+  
+  for (j in 1:lambda_N) {
+    #get current value of lambda
+    l <- lambda_grid[j] 
+    
+    #fit penalized estimate
+    if (covariates) {
+      mom_pen_est <- mom_estimator_cov(Y, X, O, penalty = TRUE, lambda = l)$A
+    } else {
+      mom_pen_est <- mom_estimator(Y, penalty = TRUE, lambda = l)$A
+    }
+    
+    #record selected support of A for current lambda 
+    A_est_supp <- which(mom_pen_est != 0)
+    selection_results$edges[j] <- length(A_est_supp)
+    full_A_est[paste0(l), , ] <- mom_pen_est
+    
+    
+    
+    #refit based on selected edges of A
+    if (length(A_est_supp) > 0) {
+      K <- kronecker(t(Sigma_Z_est), diag(1, J))  # (J^2) x (J^2)
+      b <- as.vector(P_est)                          
+      
+      Ks = as.matrix(K[, A_est_supp])
+      fit = lm.fit(x = Ks, y = b)
+      a_hat = fit$coefficients
+      
+      Avec = numeric(J^2)
+      Avec[A_est_supp] = a_hat
+      A_refit = matrix(Avec, nrow = J, ncol = J)  
+      full_A_est[paste0(l), , ] <- A_est <- A_refit
+    } else {
+      full_A_est[paste0(l), , ] <- A_est <- matrix(0, J, J)
+    }
+    
+    #compute criteria for each lambda
+    selection_results$bic[j] <- n_lags*norm(A_est %*% Sigma_Z_est - P_est, type = "F") + log(n_lags)*length(A_est_supp)
+    
+  }
+  
+  return(list("bic_results" = selection_results,
+              "A_est_results" = full_A_est))
 }
 
 

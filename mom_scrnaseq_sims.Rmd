@@ -29,7 +29,7 @@ source("scrnaseq_project_functions.R")
 sourceCpp('scrnaseq_project_cpp_functions.cpp')
 ```
 
-
+# Simulation for MoM estimator for model without covariates
 ## Simulation Settings
 
 ```{r sim-setup, eval = TRUE}
@@ -42,17 +42,8 @@ n <- 100
 m <- 5
 #set number of categories
 J <- 4
-#set number of covariates (excluding intercept)
-p <- 2
 #compute number of lags
 n_lags <- n*(m-1)
-
-#set "standard-ish" settings for simulation
-A <- matrix(sparseMatrix(i = 1:J, j = sample(1:J, J), x = 0.5, dims = c(J,J)), J, J)
-Sigma <- diag(0.5, nrow = J, ncol = J)
-
-#set coefficient matrix for simulating data with covariates (make sure to include intercept coefficient in here as well!)
-beta <- matrix(sample(c(-0.1, 0, 0.5, 0.5), J*(p+1), replace = TRUE), nrow = p+1, ncol = J)
 
 #set VAR(1) noise covariance(Sigma), VAR coefficient matrix (A) for various settings settings
 smallA <-  matrix(sparseMatrix(i = 1:J, j = sample(1:J, J), x = 0.1, dims = c(J,J)), J, J)
@@ -62,7 +53,6 @@ largeSigma <- diag(1, nrow = J, ncol = J)
 
 # Sigma_Z <- matrix(solve(diag(1, J*J, J*J) - kronecker(A, A)) %*% c(Sigma),
 #        nrow = J, ncol = J)
-
 
 #Set mean offset in parameters of Poisson distribution for observed values
 mu <- matrix(rep(0.5, J), nrow = J)
@@ -345,4 +335,203 @@ A_support_results_full %>% ggplot(mapping = aes(x = edges, y = tpr, color = esti
 ``` 
 
 
+# Simulations for MoM estimator for model with covariates
+
+## Simulation Settings
+```{r mom-cov-model-sim-setup}
+#set fixed parameter values
+set.seed(12)
+
+#set number of samples
+n <- 100
+#set number of timepoints per sample
+m <- 5
+#set number of categories
+J <- 4
+#set number of covariates (excluding intercept)
+p <- 2
+#compute number of lags
+n_lags <- n*(m-1)
+
+#setup for simulation
+nsim <- 200 #number of sims
+lambda_N <- 100 #number of lambda values
+lambda_min_ratio <- 0.01 # for defining the minimum lambda
+
+#set "standard-ish" settings for simulation
+A <- matrix(sparseMatrix(i = 1:J, j = sample(1:J, J), x = 0.5, dims = c(J,J)), J, J)
+Sigma <- diag(0.5, nrow = J, ncol = J)
+
+#set coefficient matrix for simulating data with covariates (make sure to include intercept coefficient in here as well!)
+beta <- matrix(sample(c(-0.1, 0, 0.5, 0.5), J*(p+1), replace = TRUE), nrow = p+1, ncol = J)
+beta <- matrix(0, nrow = p+1, ncol = J)
+
+#record true support of A (used for selection of best model with oracle knowledge in simulations)
+A_true_supp <- which(A != 0)
+
+#set up arrays to store results
+sim_beta_results <- array(NA, dim = c(2,p+1,J,nsim),
+                     dimnames = list("est_method" = c("mom_nopen", "mom_pen"),
+                                  "row" = 1:(p+1),
+                                  "column" = 1:J,
+                                  "iter" = 1:nsim))
+
+sim_Sigma_Z_results <- array(NA, dim = c(2,J,J,nsim),
+                        dimnames = list("est_method" = c("mom_nopen", "mom_pen"),
+                                        "row" = 1:J,
+                                        "column" = 1:J,
+                                        "iter" = 1:nsim))
+
+sim_Sigma_results <- array(NA, dim = c(2,J,J,nsim),
+                        dimnames = list("est_method" = c("mom_nopen", "mom_pen"),
+                                        "row" = 1:J,
+                                        "column" = 1:J,
+                                        "iter" = 1:nsim))
+
+sim_A_results <- array(NA, dim = c(3,J, J,nsim),
+                             dimnames = list("est_method" = c("mom_nopen", "mom_pen_bic", "mom_pen_oracle"),
+                                             "row" = 1:J,
+                                             "column" = 1:J,
+                                             "iter" = 1:nsim))
+```
+
+
+```{r mom-cov-model-sims}
+#run simulation
+for (i in 1:nsim) {
+  #print out iteration every 50 iteration
+  if (i %% 50 == 0) {print(i)}
+  #simulate data and set offset as some random non-zero constant
+  temp_data <- sim_data_cov(n, m, Sigma, A, beta)
+  O <- matrix(0, nrow = m, ncol = n)
+  
+  #fit non-penalized MoM estimator
+  mom_nopen_est <- mom_estimator_cov(temp_data$Y, temp_data$X, O)
+  
+  #record results
+  sim_beta_results["mom_nopen", , ,i] <- mom_nopen_est$Beta
+  sim_Sigma_Z_results["mom_nopen", , ,i] <- mom_nopen_est$Sigma_Z
+  sim_Sigma_results["mom_nopen", , ,i] <- mom_nopen_est$Sigma
+  sim_A_results["mom_nopen", , ,i] <- mom_nopen_est$A
+  
+  #fit penalized MoM estimator
+  lambda_max <- 2 * max(abs(mom_nopen_est$P %*% t(mom_nopen_est$Sigma_Z))) #this lambda guarantees 0 selected edges
+  lambda_grid <- exp(seq(log(lambda_max), log(lambda_max * lambda_min_ratio), length.out = lambda_N))
+  mom_pen_result <- mom_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = O, 
+                                                A_init = mom_nopen_est$A, Sigma_Z_est = mom_nopen_est$Sigma_Z, P_est = mom_nopen_est$P, 
+                                                lambda_grid = lambda_grid, covariates = TRUE)
+  
+  #get index of selected lambda according to BIC criterion
+  bic_selected_idx <- which.min(mom_pen_result$bic_results$bic)
+  #get index of oracle selected lambda
+  selected_edges <- apply(mom_pen_result$A_est_results, 1, function (x) {which(x != 0)})
+  tpr_edges_df <- data.frame("lambda" = lambda_grid,
+                           "tpr" = sapply(selected_edges, function (x) {length(intersect(x, A_true_supp))/length(A_true_supp)}),
+                           "edges" = sapply(selected_edges, function (x) {length(x)}))
+  oracle_selected_lambda <- tpr_edges_df %>% 
+    filter(tpr == max(tpr_edges_df$tpr)) %>%
+    filter(edges == min(edges)) %>%
+    select(lambda) %>%
+    pull() %>%
+    min()
+  oracle_selected_idx <- which(tpr_edges_df$lambda == oracle_selected_lambda)
+  sim_A_results["mom_pen_bic", , , i] <- mom_pen_result$A_est_results[bic_selected_idx, ,]
+  sim_A_results["mom_pen_oracle", , ,i] <- mom_pen_result$A_est_results[oracle_selected_idx, ,]
+  
+}
+
+```
+
+
+# Tabulate Results
+```{r mom-cov-model-sim-tabulate-results}
+# tabulate results
+sim_beta_res_df <- as.data.frame.table(sim_beta_results, responseName = "value")
+sim_SZ_res_df <- as.data.frame.table(sim_Sigma_Z_results, responseName = "value")
+sim_A_res_df <- as.data.frame.table(sim_A_results, responseName = "value")
+sim_Sigma_res_df <- as.data.frame.table(sim_Sigma_results, responseName = "value")
+
+#beta results summary
+sim_beta_res_summary <- sim_beta_res_df %>%
+  group_by(est_method, row, column) %>%
+  summarise(mean_val = mean(value),
+            median_val = median(value),
+            sd = sd(value))
+#add true values into summary table to facilitate comparison between estimates and truth
+sim_beta_res_summary$true_value <- diag(beta[sim_beta_res_summary$row, sim_beta_res_summary$column])
+
+#Sigma results summary
+sim_Sigma_res_summary <- sim_Sigma_res_df %>%
+  group_by(est_method, row, column) %>%
+  summarise(mean_val = mean(value),
+            median_val = median(value),
+            sd = sd(value))
+#add true values into summary table to facilitate comparison between estimates and truth
+sim_Sigma_res_summary$true_value <- diag(Sigma[sim_Sigma_res_summary$row, sim_Sigma_res_summary$column])
+
+#A results summary
+sim_A_res_summary <- sim_A_res_df %>%
+  group_by(est_method, row, column) %>%
+  summarise(mean_val = mean(value),
+            median_val = median(value),
+            sd = sd(value))
+#add true values into summary table to facilitate comparison between estimates and truth
+sim_A_res_summary$true_value <- diag(A[sim_A_res_summary$row, sim_A_res_summary$column])
+```
+
+```{r mom-cov-model-sim-visualize-results}
+#visualize beta results for MoM estimator
+sim_beta_res_df$true_value <- diag(beta[sim_beta_res_df$row,sim_beta_res_df$column])
+sim_beta_res_df %>% mutate(error = value - true_value) %>%
+  mutate("parameter" = paste0("Beta_",row, column)) %>%
+  filter(est_method == "mom_nopen") %>%
+  ggplot(mapping = aes(x = error)) +
+  geom_boxplot() +
+  facet_wrap(~ parameter) +
+  theme_bw()
+
+#visualize Sigma results for MoM estimator
+sim_Sigma_res_df$true_value <- diag(Sigma[sim_Sigma_res_df$row,sim_Sigma_res_df$column])
+sim_Sigma_res_df %>% mutate(error = value - true_value) %>%
+  mutate("parameter" = paste0("Sigma_",row, column)) %>%
+  filter(est_method == "mom_nopen") %>%
+  ggplot(mapping = aes(x = error)) +
+  geom_boxplot() +
+  facet_wrap(~ parameter) +
+  theme_bw()
+
+#visualize A results for non-penalized MoM estimator
+sim_A_res_df$true_value <- diag(A[sim_A_res_df$row,sim_A_res_df$column])
+sim_A_res_df %>% mutate(error = value - true_value) %>%
+  mutate("parameter" = paste0("A_",row, column)) %>%
+  filter(est_method == "mom_nopen") %>%
+  ggplot(mapping = aes(x = error)) +
+  geom_boxplot() +
+  facet_wrap(~ parameter) +
+  theme_bw()
+
+#visualize A support recovery results for penalized MoM estimators (those selected by BIC vs selected by oracle)
+sim_A_edges_results <- apply(sim_A_results, c(1,4), function (x) {sum(x != 0)})
+sim_A_tpr_results <- apply(sim_A_results, c(1,4), function (x) {length(intersect(which(x != 0), A_true_supp))/length(A_true_supp)})
+sim_A_fpr_results <- apply(sim_A_results, c(1,4), function (x) {length(intersect(which(x != 0), c(1:J^2)[-A_true_supp]))/(J^2 - length(A_true_supp))})
+A_support_results <- data.frame("est_method" = rep(rownames(sim_A_edges_results), ncol(sim_A_edges_results)),
+                                "iter" = rep(colnames(sim_A_edges_results), each = nrow(sim_A_edges_results)),
+                                "tpr" = c(sim_A_tpr_results),
+                                "fpr" = c(sim_A_fpr_results),
+                                "edges" = c(sim_A_edges_results)) %>%
+  pivot_longer(cols = c('tpr', 'fpr'), names_to = "metric", values_to = "value")
+
+A_support_results %>% filter(metric == 'tpr') %>%
+  ggplot(mapping = aes(x = edges, y = value*length(A_true_supp))) +
+  geom_point() +
+  labs(x = "total edges recovered",
+       y = "true edges recovered") +
+  facet_wrap(~ est_method, nrow = 3) +
+  theme_bw()
+
+A_support_results %>% ggplot(mapping = aes(x = metric, y = value, color = metric)) +
+  geom_boxplot() +
+  facet_wrap(~ est_method) +
+  theme_bw()
+```
 
