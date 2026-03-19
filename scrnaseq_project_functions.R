@@ -1472,18 +1472,13 @@ mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_e
     l <- lambda_grid[j] 
     
     #fit penalized estimate
-    if (covariates) {
-      mom_pen_est <- mom_estimator_cov(Y, X, O, penalty = TRUE, lambda = l)$A
-    } else {
-      mom_pen_est <- mom_estimator(Y, penalty = TRUE, lambda = l)$A
-    }
+    mom_pen_est <- mom_optim_A(A_init = NULL, Sigma_Z = Sigma_Z_est, P = P_est, lambda = l, tol = 1e-7, max.iter = 2000)
+    
     
     #record selected support of A for current lambda 
     A_est_supp <- which(mom_pen_est != 0)
     selection_results$edges[j] <- length(A_est_supp)
     full_A_est[paste0(l), , ] <- mom_pen_est
-    
-    
     
     #refit based on selected edges of A
     if (length(A_est_supp) > 0) {
@@ -1503,7 +1498,7 @@ mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_e
     }
     
     #compute criteria for each lambda
-    selection_results$bic[j] <- n_lags*norm(A_est %*% Sigma_Z_est - P_est, type = "F") + log(n_lags)*length(A_est_supp)
+    selection_results$bic[j] <- n_lags*sum((A_est %*% Sigma_Z_est - P_est)^2) + log(n_lags)*length(A_est_supp) 
     
   }
   

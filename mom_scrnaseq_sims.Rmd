@@ -347,9 +347,9 @@ n <- 100
 #set number of timepoints per sample
 m <- 5
 #set number of categories
-J <- 4
+J <- 10
 #set number of covariates (excluding intercept)
-p <- 2
+p <- 3
 #compute number of lags
 n_lags <- n*(m-1)
 
@@ -400,7 +400,7 @@ sim_A_results <- array(NA, dim = c(3,J, J,nsim),
 #run simulation
 for (i in 1:nsim) {
   #print out iteration every 50 iteration
-  if (i %% 50 == 0) {print(i)}
+  if (i %% 20 == 0) {print(paste0("Simulation: ", i))}
   #simulate data and set offset as some random non-zero constant
   temp_data <- sim_data_cov(n, m, Sigma, A, beta)
   O <- matrix(0, nrow = m, ncol = n)
@@ -481,33 +481,33 @@ sim_A_res_summary$true_value <- diag(A[sim_A_res_summary$row, sim_A_res_summary$
 
 ```{r mom-cov-model-sim-visualize-results}
 #visualize beta results for MoM estimator
-sim_beta_res_df$true_value <- diag(beta[sim_beta_res_df$row,sim_beta_res_df$column])
+sim_beta_res_df$true_value <- mapply(function (x,y) {beta[x,y]}, sim_beta_res_df$row, sim_beta_res_df$column)
 sim_beta_res_df %>% mutate(error = value - true_value) %>%
-  mutate("parameter" = paste0("Beta_",row, column)) %>%
   filter(est_method == "mom_nopen") %>%
   ggplot(mapping = aes(x = error)) +
   geom_boxplot() +
-  facet_wrap(~ parameter) +
+  facet_grid(row ~ column) +
+  labs(title = "beta MoM Error") +
   theme_bw()
 
 #visualize Sigma results for MoM estimator
-sim_Sigma_res_df$true_value <- diag(Sigma[sim_Sigma_res_df$row,sim_Sigma_res_df$column])
+sim_Sigma_res_df$true_value <- mapply(function (x,y) {Sigma[x,y]}, sim_Sigma_res_df$row, sim_Sigma_res_df$column)
 sim_Sigma_res_df %>% mutate(error = value - true_value) %>%
-  mutate("parameter" = paste0("Sigma_",row, column)) %>%
   filter(est_method == "mom_nopen") %>%
   ggplot(mapping = aes(x = error)) +
   geom_boxplot() +
-  facet_wrap(~ parameter) +
+  facet_grid(row ~ column) +
+  labs(title = "Sigma MoM Error") +
   theme_bw()
 
 #visualize A results for non-penalized MoM estimator
-sim_A_res_df$true_value <- diag(A[sim_A_res_df$row,sim_A_res_df$column])
+sim_A_res_df$true_value <- mapply(function (x,y) {A[x,y]}, sim_A_res_df$row, sim_A_res_df$column)
 sim_A_res_df %>% mutate(error = value - true_value) %>%
-  mutate("parameter" = paste0("A_",row, column)) %>%
   filter(est_method == "mom_nopen") %>%
   ggplot(mapping = aes(x = error)) +
   geom_boxplot() +
-  facet_wrap(~ parameter) +
+  facet_grid(row ~ column) +
+  labs(title = "A MoM (Non-Penalized) Error") +
   theme_bw()
 
 #visualize A support recovery results for penalized MoM estimators (those selected by BIC vs selected by oracle)
