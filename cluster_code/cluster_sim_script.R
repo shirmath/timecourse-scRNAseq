@@ -11,7 +11,7 @@ source("../scrnaseq_project_functions.R")
 sourceCpp("../scrnaseq_project_cpp_functions.cpp")
 
 #GET ITERATION NUMBER OF TASK FOR KEEPING TRACK OF RESULTS
-# The iteration number is passed as a command line argument in the sbatch script:
+# The iteration number is passed as a command line argument in the sbatch script:a
 iteration <- commandArgs(trailingOnly=TRUE)[1]
 
 #SET UP SETTINGS FOR SIMULATION
@@ -33,7 +33,7 @@ p <- sim_settings[[sim_setting_idx]]$p
 n_lags <- n*(m-1)
 
 #setup for simulation
-nsim <- 2 #number of sims
+nsim <- 4 #number of sims
 lambda_N <- 100 #number of lambda values
 lambda_min_ratio <- 0.01 # for defining the minimum lambda
 
