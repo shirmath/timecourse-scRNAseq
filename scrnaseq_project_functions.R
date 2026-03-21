@@ -9,7 +9,7 @@ library(nloptr)
 library(numDeriv)
 
 #SOURCE CPP FUNCTIONS
-sourceCpp("scrnaseq_project_cpp_functions.cpp")
+#sourceCpp("scrnaseq_project_cpp_functions.cpp")
 
 #FUNCTION TO GENERATE SIMULATED DATA
 sim_data <- function(n, m, J, Sigma, A, mu) {

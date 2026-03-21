@@ -345,16 +345,16 @@ set.seed(12)
 #set number of samples
 n <- 100
 #set number of timepoints per sample
-m <- 5
+m <- 30
 #set number of categories
-J <- 10
+J <- 50
 #set number of covariates (excluding intercept)
-p <- 3
+p <- 5
 #compute number of lags
 n_lags <- n*(m-1)
 
 #setup for simulation
-nsim <- 200 #number of sims
+nsim <- 1 #number of sims
 lambda_N <- 100 #number of lambda values
 lambda_min_ratio <- 0.01 # for defining the minimum lambda
 
@@ -368,6 +368,18 @@ beta <- matrix(0, nrow = p+1, ncol = J)
 
 #record true support of A (used for selection of best model with oracle knowledge in simulations)
 A_true_supp <- which(A != 0)
+
+#compile simulation settings information in list
+sim_settings <- list("n" = n,
+                     "T" = m,
+                     "J" = J,
+                     "p" = p,
+                     "nsims" = nsim,
+                     "lambda_N" = lambda_N,
+                     "lambda_min_ratio" = lambda_min_ratio,
+                     "A" = A,
+                     "Sigma" = Sigma,
+                     "beta" = beta)
 
 #set up arrays to store results
 sim_beta_results <- array(NA, dim = c(2,p+1,J,nsim),
@@ -393,10 +405,18 @@ sim_A_results <- array(NA, dim = c(3,J, J,nsim),
                                              "row" = 1:J,
                                              "column" = 1:J,
                                              "iter" = 1:nsim))
+
+sim_lambda_results <- array(NA, dim = c(2, nsim),
+                            dimnames = list("selection_criteria" = c("bic", "oracle"),
+                            "iter" = 1:nsim))
+
+sim_full_A_selection_results <- vector(mode = "list")
 ```
 
 
 ```{r mom-cov-model-sims}
+#tracking for time taken
+start_time <- Sys.time()
 #run simulation
 for (i in 1:nsim) {
   #print out iteration every 50 iteration
@@ -417,7 +437,7 @@ for (i in 1:nsim) {
   #fit penalized MoM estimator
   lambda_max <- 2 * max(abs(mom_nopen_est$P %*% t(mom_nopen_est$Sigma_Z))) #this lambda guarantees 0 selected edges
   lambda_grid <- exp(seq(log(lambda_max), log(lambda_max * lambda_min_ratio), length.out = lambda_N))
-  mom_pen_result <- mom_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = O, 
+  sim_full_A_selection_results[[i]] <- mom_pen_result <- mom_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = O, 
                                                 A_init = mom_nopen_est$A, Sigma_Z_est = mom_nopen_est$Sigma_Z, P_est = mom_nopen_est$P, 
                                                 lambda_grid = lambda_grid, covariates = TRUE)
   
@@ -431,14 +451,20 @@ for (i in 1:nsim) {
   oracle_selected_lambda <- tpr_edges_df %>% 
     filter(tpr == max(tpr_edges_df$tpr)) %>%
     filter(edges == min(edges)) %>%
-    select(lambda) %>%
+    dplyr::select(lambda) %>%
     pull() %>%
     min()
   oracle_selected_idx <- which(tpr_edges_df$lambda == oracle_selected_lambda)
   sim_A_results["mom_pen_bic", , , i] <- mom_pen_result$A_est_results[bic_selected_idx, ,]
   sim_A_results["mom_pen_oracle", , ,i] <- mom_pen_result$A_est_results[oracle_selected_idx, ,]
+  sim_lambda_results["bic", i] <- lambda_grid[bic_selected_idx]
+  sim_lambda_results["oracle", i] <- lambda_grid[oracle_selected_idx]
   
 }
+
+#tracking for time
+end_time <- Sys.time()
+elapsed_time <- end_time - start_time
 
 ```
 
@@ -532,6 +558,35 @@ A_support_results %>% filter(metric == 'tpr') %>%
 A_support_results %>% ggplot(mapping = aes(x = metric, y = value, color = metric)) +
   geom_boxplot() +
   facet_wrap(~ est_method) +
+  labs(title = paste0("TPR and FPR for Penalized MoM, J: ", J))+
   theme_bw()
 ```
 
+
+# Notes for MoM Sims
+Since the real data I was planning to use for the analysis section has 29 timepoints, 27 categories at the most general level of classification, and 248 sites, I was thinking of setting up the simulations with for one regime with J = 25 and another with J = 50, and then within each vary the sample size, n, to be either 100 or 500, fix the timepoints, T, to be 30, and then have 4 settings for the ground truth transition matrix and noise for the VAR process, with the transition matrix being sparse with values of 0.5 or 0.9 and the covariance matrix being diagonal with entries either 0.5 or 0.9 (I just thought to use these values since I had used them in earlier simulation studies); does this sound reasonable, or would a different setup make more sense?
+
+We'll consider the two regimes, a "medium"-dimension one with $J = 25$ and another with $J = 50$. We will vary $n$ to be either 100 or 500, fix $T$ at 30, and then have 9 possible combinations of sparse A and diagonal Sigma, with their values being either $0.2, 0.5, 0.8$. List of settings and names below.
+
+Settings: 
+- Setting 1: J = 50, n = 100, A = 0.2, Sigma = 0.2
+- Setting 2: J = 50, n = 500, A = 0.2, Sigma = 0.2
+- Setting 3: J = 50, n = 100, A = 0.2, Sigma = 0.5
+- Setting 4: J = 50, n = 500, A = 0.2, Sigma = 0.5
+- Setting 5: J = 50, n = 100, A = 0.2, Sigma = 0.8
+- Setting 6: J = 50, n = 500, A = 0.2, Sigma = 0.8
+- Setting 7: J = 50, n = 100, A = 0.5, Sigma = 0.2
+- Setting 8: J = 50, n = 500, A = 0.5, Sigma = 0.2
+- Setting 9: J = 50, n = 100, A = 0.5, Sigma = 0.5
+- Setting 10: J = 50, n = 500, A = 0.5, Sigma = 0.5
+- Setting 11: J = 50, n = 100, A = 0.5, Sigma = 0.8
+- Setting 12: J = 50, n = 500, A = 0.5, Sigma = 0.8
+- Setting 13: J = 50, n = 100, A = 0.8, Sigma = 0.2
+- Setting 14: J = 50, n = 500, A = 0.8, Sigma = 0.2
+- Setting 15: J = 50, n = 100, A = 0.8, Sigma = 0.5
+- Setting 16: J = 50, n = 500, A = 0.8, Sigma = 0.5
+- Setting 17: J = 50, n = 100, A = 0.8, Sigma = 0.8
+- Setting 18: J = 50, n = 500, A = 0.8, Sigma = 0.8
+
+# Other Notes
+It took 1 hour to run 20 iterations of simulation for Setting 9 using my code above.
