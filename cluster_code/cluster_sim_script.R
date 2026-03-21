@@ -8,7 +8,7 @@ library(data.table)
 
 #import functions
 source("../scrnaseq_project_functions.R")
-sourceCpp("../scrnaseq_project_cpp_functions.cpp")
+#Rcpp::sourceCpp("../scrnaseq_project_cpp_functions.cpp")
 
 #GET ITERATION NUMBER OF TASK FOR KEEPING TRACK OF RESULTS
 # The iteration number is passed as a command line argument in the sbatch script:a
