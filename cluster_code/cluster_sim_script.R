@@ -19,7 +19,7 @@ iteration <- commandArgs(trailingOnly=TRUE)[1]
 load("sim_settings.Rdata")
 
 #CHANGE THIS FOR DIFFERENT SIM SETTINGS (RECALL THERE ARE 36 TOTAL SETTINGS)
-sim_setting_idx <- 1
+sim_setting_idx <- 2
 
 #set number of samples
 n <- sim_settings[[sim_setting_idx]]$n
@@ -45,7 +45,8 @@ beta <- sim_settings[[sim_setting_idx]]$beta
 #record true support of A (used for selection of best model with oracle knowledge in simulations)
 A_true_supp <- which(A != 0)
 
-#set up arrays to store results
+#set up lists and arrays to store simulated data for each iter and results
+sim_data_list <- vector(mode = "list")
 sim_beta_results <- array(NA, dim = c(2,p,J,nsim),
                           dimnames = list("est_method" = c("mom_nopen", "mom_pen"),
                                           "row" = 1:p,
@@ -82,6 +83,8 @@ for (i in 1:nsim) {
   #simulate data and set offset as some random non-zero constant
   temp_data <- sim_data_cov(n, m, Sigma, A, beta)
   O <- matrix(0, nrow = m, ncol = n)
+  
+  sim_data_list[[i]] <- temp_data
   
   #fit non-penalized MoM estimator
   mom_nopen_est <- mom_estimator_cov(temp_data$Y, temp_data$X, O)
@@ -122,6 +125,10 @@ for (i in 1:nsim) {
 #SAVE RESULTS
 # Create directory to store results for this particular sim setting
 dir.create(paste0("Setting_", sim_setting_idx), showWarnings = FALSE)
+
+#Store the simulated data across sims
+sim_data_file <- paste0("Setting_",sim_setting_idx,"/sim_data_", iteration, ".RDS")
+saveRDS(sim_data_list, file = beta_file)
 
 #Store beta results
 beta_file <- paste0("Setting_",sim_setting_idx,"/sim_beta_", iteration, ".RDS")

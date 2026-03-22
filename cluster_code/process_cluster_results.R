@@ -106,3 +106,25 @@ A_support_results %>% ggplot(mapping = aes(x = metric, y = value, color = metric
   facet_wrap(~ est_method) +
   labs(title = paste0("TPR and FPR for Penalized MoM, J: ", J))+
   theme_bw()
+
+#visualize results for non-zero entries of Sigma for MoM estimator
+sim_Sigma_res_df$true_value <- mapply(function (x,y) {Sigma[x,y]}, sim_Sigma_res_df$row, sim_Sigma_res_df$column)
+sim_Sigma_res_df %>% mutate(error = value - true_value) %>%
+  filter(est_method == "mom_nopen",
+         true_value != 0) %>%
+  ggplot(mapping = aes(x = error)) +
+  geom_boxplot() +
+  facet_wrap(~ row) +
+  labs(title = "Sigma MoM Error") +
+  theme_bw()
+
+#visualize results for beta for MoM estimator
+sim_beta_res_df$true_value <- mapply(function (x,y) {beta[x,y]}, sim_beta_res_df$row, sim_beta_res_df$column)
+sim_beta_res_df %>% mutate(error = value - true_value) %>%
+  filter(est_method == "mom_nopen",
+         true_value != 0) %>%
+  ggplot(mapping = aes(x = error)) +
+  geom_boxplot() +
+  facet_grid(rows = vars(row), cols = vars(column)) +
+  labs(title = "beta MoM Error") +
+  theme_bw()
