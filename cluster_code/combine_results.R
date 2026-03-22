@@ -21,7 +21,7 @@ for (i in 1:n_settings) {
   #GET INFO ON SIM SETTING
   #specify setting index you wish to consider and get its corresponding settings
   
-  sim_setting_idx <- settings_list[i]
+  sim_setting_idx <- i
   
   #get true parameter values for setting you are considering
   #get number of samples
