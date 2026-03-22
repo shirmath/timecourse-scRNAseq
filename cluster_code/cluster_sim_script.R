@@ -19,7 +19,7 @@ iteration <- commandArgs(trailingOnly=TRUE)[1]
 load("sim_settings.Rdata")
 
 #CHANGE THIS FOR DIFFERENT SIM SETTINGS (RECALL THERE ARE 36 TOTAL SETTINGS)
-sim_setting_idx <- 2
+sim_setting_idx <- 1
 
 #set number of samples
 n <- sim_settings[[sim_setting_idx]]$n
@@ -128,7 +128,7 @@ dir.create(paste0("Setting_", sim_setting_idx), showWarnings = FALSE)
 
 #Store the simulated data across sims
 sim_data_file <- paste0("Setting_",sim_setting_idx,"/sim_data_", iteration, ".RDS")
-saveRDS(sim_data_list, file = beta_file)
+saveRDS(sim_data_list, file = sim_data_file)
 
 #Store beta results
 beta_file <- paste0("Setting_",sim_setting_idx,"/sim_beta_", iteration, ".RDS")
