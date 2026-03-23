@@ -19,7 +19,7 @@ iteration <- commandArgs(trailingOnly=TRUE)[1]
 load("sim_settings.Rdata")
 
 #CHANGE THIS FOR DIFFERENT SIM SETTINGS (RECALL THERE ARE 36 TOTAL SETTINGS)
-sim_setting_idx <- 1
+sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0-9]+"))
 
 #set number of samples
 n <- sim_settings[[sim_setting_idx]]$n
@@ -33,7 +33,7 @@ p <- sim_settings[[sim_setting_idx]]$p
 n_lags <- n*(m-1)
 
 #setup for simulation
-nsim <- 4 #number of sims
+nsim <- 1 #number of sims
 lambda_N <- 100 #number of lambda values
 lambda_min_ratio <- 0.01 # for defining the minimum lambda
 
