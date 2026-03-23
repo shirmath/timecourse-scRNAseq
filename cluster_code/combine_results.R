@@ -17,11 +17,13 @@ beta_res_df_list <- vector(mode = "list")
 Sigma_res_df_list <- vector(mode = "list")
 A_support_df_list <- vector(mode = "list")
 
-for (i in 1:n_settings) {
+sim_setting_vec <- c(1,2,7,17)
+
+for (i in 1:4) {
   #GET INFO ON SIM SETTING
   #specify setting index you wish to consider and get its corresponding settings
   
-  sim_setting_idx <- i
+  sim_setting_idx <- sim_setting_vec[i]
   
   #get true parameter values for setting you are considering
   #get number of samples
@@ -44,20 +46,27 @@ for (i in 1:n_settings) {
   A_true_supp <- which(A != 0)
   
   #READ IN RESULTS
+  #get number of files
+  n_files <- max(as.numeric(str_extract(list.files(paste0("Setting_", sim_setting_idx)), "[0-9]+")))
+  
   #read in lambda results for the setting
-  sim_lambda_results <- do.call(cbind, lapply(1:50, function (x) {readRDS(paste0("Setting_", sim_setting_idx, "/sim_lambda_", x, ".RDS"))}))
+  sim_lambda_results <- do.call(cbind, lapply(1:n_files, function (x) {readRDS(paste0("Setting_", sim_setting_idx, "/sim_lambda_", x, ".RDS"))}))
+  colnames(sim_lambda_results) <- 1:ncol(sim_lambda_results)
   
-  #read in A results
-  sim_A_results <-  abind(lapply(1:50, function (x) {readRDS(paste0("Setting_", sim_setting_idx, "/sim_A_", x, ".RDS"))}), 
+  #read in A results, adjust iter names to reflect that there are however many sims there were distinct iterations
+  sim_A_results <-  abind(lapply(1:n_files, function (x) {readRDS(paste0("Setting_", sim_setting_idx, "/sim_A_", x, ".RDS"))}), 
                           use.first.dimnames = TRUE, use.dnns = TRUE)
+  dimnames(sim_A_results)$iter <- 1:dim(sim_A_results)[length(dim(sim_A_results))]
   
-  #read in beta results
-  sim_beta_results <-  abind(lapply(1:50, function (x) {readRDS(paste0("Setting_", sim_setting_idx, "/sim_beta_", x, ".RDS"))}),
+  #read in beta results, adjust iter names to reflect that there are however many sims there were distinct iterations
+  sim_beta_results <-  abind(lapply(1:n_files, function (x) {readRDS(paste0("Setting_", sim_setting_idx, "/sim_beta_", x, ".RDS"))}),
                              use.first.dimnames = TRUE, use.dnns = TRUE)
+  dimnames(sim_beta_results)$iter <- 1:dim(sim_beta_results)[length(dim(sim_beta_results))]
   
-  #read in Sigma results
-  sim_Sigma_results <-  abind(lapply(1:50, function (x) {readRDS(paste0("Setting_", sim_setting_idx, "/sim_Sigma_", x, ".RDS"))}),
+  #read in Sigma results, adjust iter names to reflect that there are however many sims there were distinct iterations
+  sim_Sigma_results <-  abind(lapply(1:n_files, function (x) {readRDS(paste0("Setting_", sim_setting_idx, "/sim_Sigma_", x, ".RDS"))}),
                               use.first.dimnames = TRUE, use.dnns = TRUE)
+  dimnames(sim_Sigma_results)$iter <- 1:dim(sim_Sigma_results)[length(dim(sim_Sigma_results))]
   
   
   # TABULATE RESULTS
