@@ -17,13 +17,12 @@ beta_res_df_list <- vector(mode = "list")
 Sigma_res_df_list <- vector(mode = "list")
 A_support_df_list <- vector(mode = "list")
 
-sim_setting_vec <- c(1,2,7,17)
 
-for (i in 1:4) {
+
+for (i in 1:n_settings) {
   #GET INFO ON SIM SETTING
   #specify setting index you wish to consider and get its corresponding settings
-  
-  sim_setting_idx <- sim_setting_vec[i]
+  sim_setting_idx <- i
   
   #get true parameter values for setting you are considering
   #get number of samples
