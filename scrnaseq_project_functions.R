@@ -416,13 +416,13 @@ obj_function2_cov_r <- function(params, data, scale = 1) {
 
 #objective function evaluating objective as function of non-intercept terms of beta, so intercept terms treated as fixed here
 #the beta vec input should be the vectorized matrix of strictly the non-intercept elements of the full (p+1) x J beta matrix, so should have length p*J
-obj_function2_for_beta <- function(beta_vec, params, data, scale = 1) {
+obj_function2_for_beta <- function(beta_input, params, data, scale = 1) {
   
   p <- dim(data$X)[2]
   J <- dim(data$Y)[2]
   params_list <- params
   beta_0 <- params$Beta[1,]
-  params_list$Beta <- rbind(beta_0,matrix(beta_vec, nrow = p, ncol = J))
+  params_list$Beta <- rbind(beta_0,matrix(beta_input, nrow = p, ncol = J))
   
   return(obj_function2_cov(data = data, params = params_list, scale = scale))
 }
@@ -1490,8 +1490,6 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
         new_coord_vec <- c(Sigma_update)
 
       } else if (coord_name == "Beta") {
-        #make vector to store updated coorindate
-        Beta_update <- rep(NA, (p+1)*J)
         #update intercept terms first
         xbeta_array <- aperm(apply(X, c(1,3), function (x) {t(x) %*% current_params$Beta[2:(p+1),]}), c(2,1,3))
         beta0_update <- log(apply(Y, 2, sum)) - log(apply(exp(current_params$M + 0.5*current_params$S + xbeta_array + O_array), 2, sum))
@@ -1684,18 +1682,18 @@ vi2_optim_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter
   for (t in 1:(m-1)) {
     Mt_M1 <- Mt_M1 + M[t,,] %*% t(M[t+1,,])
   }
-  obj_prev <- sum(diag((A_prev %*% Mt_M1 -0.5*(A_prev %*% quad_term %*% t(A_prev))) %*% Omega))
+  obj_prev <- -sum(diag((A_prev %*% Mt_M1 -0.5*(A_prev %*% quad_term %*% t(A_prev))) %*% Omega))
   
   for (it in 1:max.iter) {
-    print(paste0("Previous Obj Val: ", obj_prev))
-    Y_grad <- Omega %*% (t(Mt_M1) - Yk %*% quad_term) 
+    #print(paste0("Iter ", it-1, " Obj: ", obj_prev))
+    Y_grad <- -Omega %*% (t(Mt_M1) - Yk %*% quad_term) 
     A_new <- sign(Yk - step * Y_grad)*pmax(abs(Yk - step * Y_grad) - step * lambda, 0)
     
     tk_new = (1 + sqrt(1 + 4 * tk^2)) / 2
     Yk = A_new + ((tk - 1) / tk_new) * (A_new - A_prev)
     
-    obj_new = sum(diag((A_new %*% Mt_M1 -0.5*(A_new %*% quad_term %*% t(A_new))) %*% Omega))
-    if (abs(obj_new - obj_prev) / (abs(obj_prev)) < tol) {
+    obj_new = -sum(diag((A_new %*% Mt_M1 -0.5*(A_new %*% quad_term %*% t(A_new))) %*% Omega))
+    if (abs(obj_new - obj_prev) / (abs(obj_prev) + 1e-14) < tol) {
       A_prev = A_new
       break
     }

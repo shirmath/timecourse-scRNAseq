@@ -518,6 +518,7 @@ double obj_function2_cov(
   arma::mat Omega = inv(Sigma);
   arma::cube mu_cube = cube(size(Y));
   // populate mu cube appropriately by looping over all covariates and computing their specific mean
+  // populate mu cube appropriately by looping over all covariates and computing their specific mean
   for (int i=0; i != Y.n_slices; ++i) {
     mu_cube.slice(i) = X.slice(i) * beta.rows(1,beta.n_rows-1) + repelem(beta.row(0), Y.n_rows, 1);
   }
@@ -525,6 +526,7 @@ double obj_function2_cov(
   for (int i=0; i != Y.n_cols; ++i) {
     mu_cube.col(i) = mu_cube.col_as_mat(i) + O;
   }
+  
 
   arma::mat M1 = init_M.row_as_mat(0); 
   arma::cube M1_M1t_S1 = cube(Y.n_cols, Y.n_cols, Y.n_slices);
@@ -561,7 +563,7 @@ double obj_function2_cov(
    cout << "Term 1: " << term_1 << "\n";
    cout << "Term 2: " << term_2 << "\n";
    cout << "Term 3: " << term_3 << "\n";
-   */
+  */ 
   
   
   
