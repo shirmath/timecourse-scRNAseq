@@ -371,16 +371,95 @@ obj_function2_for_mu <- function(mu_vec, params, data, scale = 1) {
   return(obj_function2(data = data, params = params_list, scale = scale))
 }
 
-obj_function2_for_M <- function(M_vec, params, data, scale = 1) {
 
+#r version of ELBO conditional on Z_1 (not complete, had just written partially to troubleshoot)
+obj_function2_cov_r <- function(params, data, scale = 1) {
+  #get necessary values
+  Y <- data$Y
+  X <- data$X
+  O <- data$O
+  A <- params$A
+  Sigma <- params$Sigma
+  beta <- params$Beta
+  M <- params$M
+  S <- params$S
+  
+  n <- dim(Y)[3]
+  m <- dim(Y)[1]
+  J <- dim(Y)[2]
+  p <- dim(X)[2]
+  
+  #compute term 1
+  mu_array <- aperm(apply(X, c(1,3), function (x) {matrix(data = c(1,x), nrow = 1) %*% beta}), c(2,1,3)) + aperm(array(O, c(m,n, J)), c(1,3,2))
+  t1 <- sum(Y*(M + mu_array) - exp(mu_array + M + 0.5*S))
+  print(paste0("term 1: ", t1))
+  
+  #compute term 2
+  t2 <- 0.5*(n*(m-1)*J - n*(m-1)*log(det(Sigma)) + sum(log(S[2:m,,])))
+  print(paste0("term 2: ", t2))
+  
+  #compute term 3
+  St_all <- diag(apply(S[1:(m-1), ,], c(2), sum))
+  St1_all <- diag(apply(S[2:m, ,], c(2), sum))
+  Mt_M <- matrix(apply(apply(M[1:(m-1),,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
+  M1t_M1 <- matrix(apply(apply(M[2:m,,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
+  Mt_M1 <- matrix(0, J, J)
+  for (t in 1:(m-1)) {
+    Mt_M1 <- Mt_M1 + M[t,,] %*% t(M[t+1,,])
+  }
+  
+  t3 <- -0.5*sum(diag((M1t_M1 - A %*% Mt_M1 - t(Mt_M1) %*% t(A) + St1_all + A %*% (St_all + Mt_M) %*% t(A)) %*% solve(Sigma)))
+  print(paste0("term 3: ", t3))
+  
+  return(scale*(t1 + t2 + t3))
+}
+
+#objective function evaluating objective as function of non-intercept terms of beta, so intercept terms treated as fixed here
+#the beta vec input should be the vectorized matrix of strictly the non-intercept elements of the full (p+1) x J beta matrix, so should have length p*J
+obj_function2_for_beta <- function(beta_vec, params, data, scale = 1) {
+  
+  p <- dim(data$X)[2]
+  J <- dim(data$Y)[2]
+  params_list <- params
+  beta_0 <- params$Beta[1,]
+  params_list$Beta <- rbind(beta_0,matrix(beta_vec, nrow = p, ncol = J))
+  
+  return(obj_function2_cov(data = data, params = params_list, scale = scale))
+}
+
+obj_function2_for_beta0 <- function(beta0_vec, params, data, scale = 1) {
+  
+  p <- dim(data$X)[2]
+  J <- dim(data$Y)[2]
+  params_list <- params
+  beta <- params$Beta[2:(p+1),]
+  params_list$Beta <- rbind(beta0_vec,beta)
+  
+  return(obj_function2_cov(data = data, params = params_list, scale = scale))
+}
+
+obj_function2_for_M <- function(M_vec, params, data, scale = 1) {
+  
   m <- dim(data$Y)[1]
   J <- dim(data$Y)[2]
   n <- dim(data$Y)[3]
-
+  
   params_list <- params
   params_list$M <- array(M_vec, dim = c(m, J, n))
-
+  
   return(obj_function2(data = data, params = params_list, scale = scale))
+}
+
+obj_function2_cov_for_M <- function(M_vec, params, data, scale = 1) {
+  
+  m <- dim(data$Y)[1]
+  J <- dim(data$Y)[2]
+  n <- dim(data$Y)[3]
+  
+  params_list <- params
+  params_list$M <- array(M_vec, dim = c(m, J, n))
+  
+  return(obj_function2_cov(data = data, params = params_list, scale = scale))
 }
 
 obj_function2_for_S <- function(S_vec, params, data, scale = 1) {
@@ -392,8 +471,19 @@ obj_function2_for_S <- function(S_vec, params, data, scale = 1) {
   params_list <- params
   params_list$S <- array(S_vec, dim = c(m, J, n))
 
-
   return(obj_function2(data = data, params = params_list, scale = scale))
+}
+
+obj_function2_cov_for_S <- function(S_vec, params, data, scale = 1) {
+  
+  m <- dim(data$Y)[1]
+  J <- dim(data$Y)[2]
+  n <- dim(data$Y)[3]
+  
+  params_list <- params
+  params_list$S <- array(S_vec, dim = c(m, J, n))
+  
+  return(obj_function2_cov(data = data, params = params_list, scale = scale))
 }
 
 obj_function2_for_A <- function(A_vec, params, data, scale = 1) {
@@ -407,6 +497,45 @@ obj_function2_for_A <- function(A_vec, params, data, scale = 1) {
   
   
   return(obj_function2(data = data, params = params_list, scale = scale))
+}
+
+obj_function2_cov_for_A <- function(A_vec, params, data, scale = 1) {
+  
+  m <- dim(data$Y)[1]
+  J <- dim(data$Y)[2]
+  n <- dim(data$Y)[3]
+  
+  params_list <- params
+  params_list$A <- matrix(A_vec, nrow = J, ncol = J)
+  
+  
+  return(obj_function2_cov(data = data, params = params_list, scale = scale))
+}
+
+obj_function2_cov_for_Omega <- function(Omega_vec, params, data, scale = 1) {
+  
+  m <- dim(data$Y)[1]
+  J <- dim(data$Y)[2]
+  n <- dim(data$Y)[3]
+  
+  params_list <- params
+  params_list$Sigma <- solve(matrix(Omega_vec, nrow = J, ncol = J))
+  
+  
+  return(obj_function2_cov(data = data, params = params_list, scale = scale))
+}
+
+obj_function2_cov_for_Sigma <- function(Sigma_vec, params, data, scale = 1) {
+  
+  m <- dim(data$Y)[1]
+  J <- dim(data$Y)[2]
+  n <- dim(data$Y)[3]
+  
+  params_list <- params
+  params_list$Sigma <- matrix(Sigma_vec, nrow = J, ncol = J)
+  
+  
+  return(obj_function2_cov(data = data, params = params_list, scale = scale))
 }
 
 #GRADIENT FUNCTIONS
@@ -586,6 +715,43 @@ S_grad_r <- function(S_vec, data, params, scale = 1) {
 
 
   return(scale*grad)
+}
+
+#R version of gradient for non-intercept terms of Beta for ELBO conditional on Z_1
+beta_grad2_r <- function(beta_vec, data, params, scale = 1) {
+  #get fixed parameters and data
+  M <- params$M
+  S <- params$S
+  beta_0 <- params$Beta[1,]
+
+  Y <- data$Y
+  X <- data$X
+  O <- data$O
+  O_array <- aperm(array(O, c(m,n,J)), c(1,3,2))
+  
+  #set up target parameter
+  n <- dim(Y)[[3]]
+  J <- dim(Y)[[2]]
+  m <- dim(Y)[[1]]
+  p <- dim(X)[2]
+  beta <- matrix(beta_vec, nrow = p, ncol = J)
+  
+  #make Beta (intercepts + beta)
+  Beta <- rbind(beta_0, beta)
+  
+  #set up xbeta array
+  xbeta <- aperm(apply(X, c(1,3), function (x) {t(c(1,x)) %*% Beta}), c(2,1,3))
+  
+  #compute gradient value
+  grad <- matrix(NA, nrow = p, ncol = J)
+  for (j in 1:J) {
+    for (k in 1:p) {
+      grad[k,j] <- sum(X[,k,] * (Y[,j,] - exp(M[,j,] + 0.5*S[,j,] + xbeta[,j,] + O)))
+    }
+  }
+  
+  return(scale*grad)
+  
 }
 
 #compute gradient of vector valued parameter and return as a vector
@@ -1199,13 +1365,14 @@ vi_estimator_r <- function(sim_data_obj, init_mu, init_M, init_S, init_Sigma_Z, 
 #ELBO (CONDITION ON FIRST TIMEPOINT OF Z) OPTIMIZATION FUNCTION
 #Y should be array of observations with dimensions m x J x n
 #init_mu is a vector with J components specifying initial value of mu
+#init_beta is a matrix of dimension (p+1) x J specifying the coefficients for the intercept and p covariates across the J categories
 #init_M is vector of length m x J x n specifying initial value of variational mean parameters
 #init_S is vector of length m x J x n specifying initial value of variational variance parameters
 #init_Sigma is a vector of length J x J specifying initial value of Sigma_Z parameter
 #inint_A is a vector of length J X J specifying value of A parameter
 #optim_method specifies which optimizer to use for each coord desc iteration; must be one of "nloptr" or "optim"
 #max.iter specifies how many iterations to go before terminating
-vi_estimator2 <- function(Y, init_mu, init_M, init_S, init_Sigma, init_A, 
+vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, init_A, 
                           optim_method = "optim", 
                           max.iter = 100, 
                           tol = 1e-4, 
@@ -1215,23 +1382,27 @@ vi_estimator2 <- function(Y, init_mu, init_M, init_S, init_Sigma, init_A,
                           lambda = 1) {
 
   #get data sample and parameter dimensions
-  obs <- list("Y" = Y)
+  obs <- list("Y" = Y, "X" = X, "O" = O)
+  p <- dim(X)[2]
   m <- dim(Y)[1]
   J <- dim(Y)[2]
   n <- dim(Y)[3]
+  
+  #make array version of offsets for ease of future computations
+  O_array <- aperm(array(O, c(m, n, J)), c(1,3,2))
 
   #set up init params with variational parameters and user-provided initial values for parameters of interest
   init_params <- vector(mode = "list")
   init_params$M <- array(init_M, dim = c(m, J, n))
   init_params$S <- array(init_S, dim = c(m, J, n))
-  init_params$mu <- matrix(c(init_mu), nrow = 1)
   init_params$Sigma <- matrix(init_Sigma, J, J)
   init_params$A <- matrix(init_A, J, J)
+  init_params$Beta <- matrix(c(init_beta), nrow = p+1, ncol = J)
 
   #set up before starting optimization loop
   param_names <- names(init_params)
   current_params <- init_params
-  current_obj_val <- obj_function2(obs, current_params)
+  current_obj_val <- obj_function2_cov(obs, current_params)
   iter <- 0
   converged <- FALSE
 
@@ -1246,38 +1417,41 @@ vi_estimator2 <- function(Y, init_mu, init_M, init_S, init_Sigma, init_A,
       #get coordinate name
       coord_name <- param_names[i]
       
-      if(verbose & coord_name %in% c("mu", "Sigma", "A")) {
-        print(coord_name)
-        print(paste0("Current value: ", unlist(past_params[coord_name])))
-      }
       #skip coordinates as specified
       if (coord_name %in% skip_coords) {
         next
+      }
+      
+      if(verbose) {
+        print(coord_name)
+        if (coord_name %in% c("Beta", "Sigma", "A")) {
+          print(paste0("Current value: ", unlist(past_params[coord_name])))
+        }
       }
 
       coord_current_val <- unlist(past_params[coord_name])
       coord_current_val_vec <- c(coord_current_val)
 
       coord_grad <- switch(coord_name,
-                           "mu" = mu_grad,
-                           "M" = M_grad2,
-                           "S" = S_grad2
+                           "Beta" = beta_grad2,
+                           "M" = M_grad2_cov,
+                           "S" = S_grad2_cov
       )
 
       coord_obj <- switch(coord_name,
-                          "mu" = obj_function2_for_mu,
-                          "M" = obj_function2_for_M,
-                          "S" = obj_function2_for_S
+                          "Beta" = obj_function2_for_beta,
+                          "M" = obj_function2_cov_for_M,
+                          "S" = obj_function2_cov_for_S
       )
 
       coord_lower <- switch(coord_name,
-                            "mu" = rep(-Inf, length(coord_current_val_vec)),
+                            "Beta" = rep(-Inf, p*J),
                             "M" = rep(-Inf, length(coord_current_val_vec)),
-                            "S" = rep(1e-4, length(coord_current_val_vec))
+                            "S" = rep(1e-10, length(coord_current_val_vec))
       )
 
       coord_upper <- switch(coord_name,
-                            "mu" = rep(Inf, length(coord_current_val_vec)),
+                            "Beta" = rep(Inf, p*J),
                             "M" = rep(Inf, length(coord_current_val_vec)),
                             "S" = rep(Inf, length(coord_current_val_vec))
       )
@@ -1296,26 +1470,64 @@ vi_estimator2 <- function(Y, init_mu, init_M, init_S, init_Sigma, init_A,
           A_update <- M_term1 %*% solve(M_term2 + S_sum)
           new_coord_vec <- c(A_update)
         } else {
-          
-          A_update <- optim_A_penalty(obs = obs, current_params = current_params, est = "vi", 
-                                      lambda = lambda, line_search = FALSE)
+          A_update <- vi2_optim_A(A_init = matrix(coord_current_val_vec, J, J), Sigma = current_params$Sigma, M = current_params$M, S = current_params$S, lambda = lambda, tol = 1e-7, max.iter = 2000)
           new_coord_vec <- c(A_update)
         }
 
       } else if (coord_name == "Sigma") {
 
         Sigma_update <- matrix(0, nrow = J, ncol = J)
+        St_all <- diag(apply(current_params$S[1:(m-1), ,], c(2), sum))
+        St1_all <- diag(apply(current_params$S[2:m, ,], c(2), sum))
+        Mt_M <- matrix(apply(apply(current_params$M[1:(m-1),,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
+        M1t_M1 <- matrix(apply(apply(current_params$M[2:m,,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
+        Mt_M1 <- matrix(0, J, J)
         for (t in 1:(m-1)) {
-          Sigma_update <- Sigma_update + t(t(current_params$M[t+1,,]) - t(current_params$M[t,,]) %*% t(current_params$A)) %*% (t(current_params$M[t+1,,]) - t(current_params$M[t,,]) %*% t(current_params$A))
-          Sigma_update <- Sigma_update + diag(apply(current_params$S[t+1,,], 1, sum)) + current_params$A %*% diag(apply(current_params$S[t,,], 1, sum)) %*% t(current_params$A)
+          Mt_M1 <- Mt_M1 + current_params$M[t,,] %*% t(current_params$M[t+1,,])
         }
-
-        Sigma_update <- (1/(n*(m-1))) * Sigma_update
+        
+        Sigma_update <- (1/(n*(m-1))) * (M1t_M1 - current_params$A %*% Mt_M1 - t(Mt_M1) %*% t(current_params$A) + St1_all + current_params$A %*% (St_all + Mt_M) %*% t(current_params$A))
         new_coord_vec <- c(Sigma_update)
 
-      } else if (coord_name == "mu") {
-        mu_update <- log(apply(Y, 2, sum)) - log(apply(exp(current_params$M + 0.5*current_params$S), 2, sum))
-        new_coord_vec <- c(mu_update)
+      } else if (coord_name == "Beta") {
+        #make vector to store updated coorindate
+        Beta_update <- rep(NA, (p+1)*J)
+        #update intercept terms first
+        xbeta_array <- aperm(apply(X, c(1,3), function (x) {t(x) %*% current_params$Beta[2:(p+1),]}), c(2,1,3))
+        beta0_update <- log(apply(Y, 2, sum)) - log(apply(exp(current_params$M + 0.5*current_params$S + xbeta_array + O_array), 2, sum))
+        
+        #update non-intercept terms
+        beta_cov_vec <- c(current_params$Beta[2:(p+1),])
+        beta_rest_params <- current_params
+        beta_rest_params$Beta[1,] <- beta0_update
+        if (optim_method == "nloptr") {
+          opt_res <- nloptr(x0 = beta_cov_vec,
+                            eval_f = coord_obj,
+                            eval_grad_f = coord_grad,
+                            opts = list(algorithm = "NLOPT_LD_CCSAQ",
+                                        xtol_rel = 1e-4,
+                                        check_derivatives = FALSE
+                                        #"ftol_rel" = 1e-4
+                            ),
+                            lb = coord_lower,
+                            ub = coord_upper,
+                            scale = -1,
+                            params = beta_rest_params,
+                            data = obs)
+          beta_cov_update <- opt_res$solution
+        } else {
+          beta_cov_update <- optim(par = beta_cov_vec,
+                                 method = "BFGS",
+                                 fn = coord_obj,
+                                 gr = coord_grad,
+                                 scale = -1,
+                                 params = beta_rest_params,
+                                 data = obs)$par
+          
+        }
+        
+        Beta_update <- rbind(beta0_update, matrix(beta_cov_update, nrow = p, ncol = J))
+        new_coord_vec <- c(Beta_update)
 
       } else {
         if (optim_method == "nloptr") {
@@ -1350,7 +1562,11 @@ vi_estimator2 <- function(Y, init_mu, init_M, init_S, init_Sigma, init_A,
                                    method = "L-BFGS-B",
                                    fn = coord_obj,
                                    gr = coord_grad,
-                                   )
+                                   scale = -1,
+                                   params = current_params,
+                                   data = obs,
+                                   lower = coord_lower,
+                                   upper = coord_upper)$par
           } else {
             new_coord_vec <- optim(par = coord_current_val_vec,
                                    method = "BFGS",
@@ -1366,7 +1582,7 @@ vi_estimator2 <- function(Y, init_mu, init_M, init_S, init_Sigma, init_A,
 
       #assign updated coordinate value to current_params object
       current_params[coord_name][[1]] <- switch(coord_name,
-                                                "mu" = matrix(new_coord_vec, nrow = 1),
+                                                "Beta" = matrix(new_coord_vec, nrow = p+1, ncol = J),
                                                 "A" = matrix(new_coord_vec, nrow = J, ncol = J),
                                                 "Sigma" = matrix(new_coord_vec, nrow = J, ncol = J),
                                                 "M" = array(new_coord_vec, dim = c(m, J, n)),
@@ -1375,7 +1591,7 @@ vi_estimator2 <- function(Y, init_mu, init_M, init_S, init_Sigma, init_A,
     }
 
     #check if converged according to some criterion
-    current_obj_val <- obj_function2(obs, current_params)
+    current_obj_val <- obj_function2_cov(obs, current_params)
     rel_diff <- abs((current_obj_val - past_obj_val)/past_obj_val)
     
     if (verbose) {
@@ -1397,10 +1613,10 @@ vi_estimator2 <- function(Y, init_mu, init_M, init_S, init_Sigma, init_A,
   result <- current_params
   result$iter <- iter
   result$rel_diff <- rel_diff
-  result$EBIC <- -2*current_obj_val + log(n)*(sum(result$A != 0) + J + J^2) + 2*log(choose(J^2, sum(result$A != 0)))
   
   return(result)
 }
+
 
 #OPTIMIZATION FUNCTION FOR ESTIMATING A WITH PENALIZED MOM
 mom_optim_A <- function(A_init = NULL, Sigma_Z, P, lambda, tol = 1e-7, max.iter = 2000) {
@@ -1426,6 +1642,59 @@ mom_optim_A <- function(A_init = NULL, Sigma_Z, P, lambda, tol = 1e-7, max.iter 
     Yk = A_new + ((tk - 1) / tk_new) * (A_new - A_prev)
     
     obj_new = sum((A_new %*% Sigma_Z - P)^2) + lambda * sum(abs(A_new))
+    if (abs(obj_new - obj_prev) / (abs(obj_prev)) < tol) {
+      A_prev = A_new
+      break
+    }
+    
+    A_prev = A_new
+    tk = tk_new
+    obj_prev = obj_new
+  }
+  
+  A_prev
+}
+
+
+#OPTIMIZATION FUNCTION FOR ESTIMATING A WITH PENALIZED VI2
+vi2_optim_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter = 2000) {
+
+  #get number of categories
+  J <- nrow(Sigma)
+  
+  #initialize A if initial value not supplied
+  if(is.null(A_init))
+  {
+    A_init <- matrix(0, J, J)
+  }
+  
+  #compute fixed step size
+  Omega <- solve(Sigma)
+  S_all <- diag(apply(S[1:(m-1), ,], c(2), sum))
+  Mt_M <- matrix(apply(apply(M[1:(m-1),,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
+  quad_term <- S_all + Mt_M
+  Lconst <- norm(Omega %*% quad_term, type = "F")
+  step <- 1 / Lconst
+  
+  #set up vars for optimization loop
+  A_prev <- A_init
+  Yk <- A_init
+  tk <- 1
+  Mt_M1 <- matrix(0, J, J)
+  for (t in 1:(m-1)) {
+    Mt_M1 <- Mt_M1 + M[t,,] %*% t(M[t+1,,])
+  }
+  obj_prev <- sum(diag((A_prev %*% Mt_M1 -0.5*(A_prev %*% quad_term %*% t(A_prev))) %*% Omega))
+  
+  for (it in 1:max.iter) {
+    print(paste0("Previous Obj Val: ", obj_prev))
+    Y_grad <- Omega %*% (t(Mt_M1) - Yk %*% quad_term) 
+    A_new <- sign(Yk - step * Y_grad)*pmax(abs(Yk - step * Y_grad) - step * lambda, 0)
+    
+    tk_new = (1 + sqrt(1 + 4 * tk^2)) / 2
+    Yk = A_new + ((tk - 1) / tk_new) * (A_new - A_prev)
+    
+    obj_new = sum(diag((A_new %*% Mt_M1 -0.5*(A_new %*% quad_term %*% t(A_new))) %*% Omega))
     if (abs(obj_new - obj_prev) / (abs(obj_prev)) < tol) {
       A_prev = A_new
       break
