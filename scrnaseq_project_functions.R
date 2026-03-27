@@ -1470,7 +1470,8 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
           A_update <- M_term1 %*% solve(M_term2 + S_sum)
           new_coord_vec <- c(A_update)
         } else {
-          A_update <- vi2_optim_A(A_init = matrix(coord_current_val_vec, J, J), Sigma = current_params$Sigma, M = current_params$M, S = current_params$S, lambda = lambda, tol = 1e-7, max.iter = 2000)
+          A_update <- vi2_optim2_A(A_init = matrix(coord_current_val_vec, J, J), Sigma = current_params$Sigma, M = current_params$M, S = current_params$S, 
+                                  lambda = lambda)
           new_coord_vec <- c(A_update)
         }
 
@@ -1667,11 +1668,14 @@ vi2_optim_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter
   }
   
   #compute fixed step size
+  print(paste0("Sigma determinant: ", det(Sigma)))
+  
   Omega <- solve(Sigma)
   S_all <- diag(apply(S[1:(m-1), ,], c(2), sum))
   Mt_M <- matrix(apply(apply(M[1:(m-1),,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
   quad_term <- S_all + Mt_M
   Lconst <- norm(Omega %*% quad_term, type = "F")
+  print(paste0("Lconst value: ", Lconst))
   step <- 1 / Lconst
   
   #set up vars for optimization loop
@@ -1685,7 +1689,9 @@ vi2_optim_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter
   obj_prev <- -sum(diag((A_prev %*% Mt_M1 -0.5*(A_prev %*% quad_term %*% t(A_prev))) %*% Omega))
   
   for (it in 1:max.iter) {
-    #print(paste0("Iter ", it-1, " Obj: ", obj_prev))
+    #if (it %% 100 == 0) {print(paste0("Iter ", it-1, " Obj: ", obj_prev))}
+    print(paste0("Iter ", it-1, " Obj: ", obj_prev))
+    
     Y_grad <- -Omega %*% (t(Mt_M1) - Yk %*% quad_term) 
     A_new <- sign(Yk - step * Y_grad)*pmax(abs(Yk - step * Y_grad) - step * lambda, 0)
     
@@ -1693,7 +1699,8 @@ vi2_optim_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter
     Yk = A_new + ((tk - 1) / tk_new) * (A_new - A_prev)
     
     obj_new = -sum(diag((A_new %*% Mt_M1 -0.5*(A_new %*% quad_term %*% t(A_new))) %*% Omega))
-    if (abs(obj_new - obj_prev) / (abs(obj_prev) + 1e-14) < tol) {
+    rel_diff <- ifelse(obj_prev != 0, abs(obj_new - obj_prev) / (abs(obj_prev)), abs(obj_new))
+    if (rel_diff < tol) {
       A_prev = A_new
       break
     }
@@ -1702,7 +1709,64 @@ vi2_optim_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter
     tk = tk_new
     obj_prev = obj_new
   }
+  print(paste0("A optim iters: ", it))
+  A_prev
+}
+
+
+#SLOW ISTA OPTIMIZER
+vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter = 20000000) {
   
+  #get number of categories
+  J <- nrow(Sigma)
+  
+  #initialize A if initial value not supplied
+  if(is.null(A_init))
+  {
+    A_init <- matrix(0, J, J)
+  }
+  
+  #compute fixed step size
+  print(paste0("Sigma determinant: ", det(Sigma)))
+  
+  Omega <- solve(Sigma)
+  S_all <- diag(apply(S[1:(m-1), ,], c(2), sum))
+  Mt_M <- matrix(apply(apply(M[1:(m-1),,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
+  quad_term <- S_all + Mt_M
+  Lconst <- norm(Omega %*% quad_term, type = "F")
+  print(paste0("Lconst value: ", Lconst))
+  step <- 1 / Lconst
+  
+  #set up vars for optimization loop
+  A_prev <- A_init
+  tk <- 1
+  Mt_M1 <- matrix(0, J, J)
+  for (t in 1:(m-1)) {
+    Mt_M1 <- Mt_M1 + M[t,,] %*% t(M[t+1,,])
+  }
+  obj_prev <- -sum(diag((A_prev %*% Mt_M1 -0.5*(A_prev %*% quad_term %*% t(A_prev))) %*% Omega))
+  
+  for (it in 1:max.iter) {
+    if (it %% 1000 == 0) {print(paste0("Iter ", it-1, " Obj: ", obj_prev))}
+    
+    A_grad <- -Omega %*% (t(Mt_M1) - A_prev %*% quad_term) 
+    A_new <- sign(A_prev - step * A_grad)*pmax(abs(A_prev - step * A_grad) - step * lambda, 0)
+    
+    # tk_new = (1 + sqrt(1 + 4 * tk^2)) / 2
+    # Yk = A_new + ((tk - 1) / tk_new) * (A_new - A_prev)
+    
+    obj_new = -sum(diag((A_new %*% Mt_M1 -0.5*(A_new %*% quad_term %*% t(A_new))) %*% Omega))
+    rel_diff <- ifelse(obj_prev != 0, abs(obj_new - obj_prev) / (abs(obj_prev)), abs(obj_new))
+    if (rel_diff < tol) {
+      A_prev = A_new
+      break
+    }
+    
+    A_prev = A_new
+    #tk = tk_new
+    obj_prev = obj_new
+  }
+  print(paste0("A optim iters: ", it))
   A_prev
 }
 
@@ -1725,9 +1789,12 @@ mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_e
   n_lags <- (m-1)*n
   
   #set up data frame for storing relevant high level results
+  #bic is computed using n*(m-1) as sample size in BIC computation
+  #bic2 is computed using n as sample size in BIC computation
   selection_results <- data.table("lambda" = lambda_grid,
                              "edges" = rep(NA, lambda_N),
-                             "bic" = rep(NA, lambda_N))
+                             "bic" = rep(NA, lambda_N),
+                             "bic2" = rep(NA, lambda_N))
   #set up array to store estimated A for each lambda
   full_A_est <- array(0, dim = c(lambda_N, J, J),
                                   dimnames = list("lambda" = lambda_grid,
@@ -1766,6 +1833,7 @@ mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_e
     
     #compute criteria for each lambda
     selection_results$bic[j] <- n_lags*sum((A_est %*% Sigma_Z_est - P_est)^2) + log(n_lags)*length(A_est_supp) 
+    selection_results$bic2[j] <- n*sum((A_est %*% Sigma_Z_est - P_est)^2) + log(n)*length(A_est_supp) 
     
   }
   
