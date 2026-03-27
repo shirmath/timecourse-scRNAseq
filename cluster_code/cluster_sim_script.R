@@ -16,7 +16,7 @@ task_num <- commandArgs(trailingOnly=TRUE)[1]
   
 #GET ITERATION NUMBER OF TASK FOR KEEPING TRACK OF RESULTS
 # The iteration number is passed as a command line argument in the sbatch script:a
-iteration <- (task_num - 1) %% 100 + 1
+iteration <- (task_num - 1) %% 25 + 1
 
 #SET UP SETTINGS FOR SIMULATION
 #load sim settings
@@ -24,7 +24,7 @@ load("sim_settings.Rdata")
 
 #CHANGE THIS FOR DIFFERENT SIM SETTINGS (RECALL THERE ARE 36 TOTAL SETTINGS)
 #sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0-9]+"))
-sim_setting_idx <- (task_num-1) %/% 100 + 1
+sim_setting_idx <- (task_num-1) %/% 25 + 1
 
 #set number of samples
 n <- sim_settings[[sim_setting_idx]]$n
@@ -38,7 +38,7 @@ p <- sim_settings[[sim_setting_idx]]$p
 n_lags <- n*(m-1)
 
 #setup for simulation
-nsim <- 1 #number of sims
+nsim <- 4 #number of sims
 lambda_N <- 100 #number of lambda values
 lambda_min_ratio <- 0.01 # for defining the minimum lambda
 
@@ -158,10 +158,10 @@ full_A_file <- paste0("Setting_",sim_setting_idx,"/sim_full_A_", iteration, ".RD
 saveRDS(sim_full_A_selection_results, file = full_A_file)
 
 # ## check that with tasks 1-3600, you can get setting and iteration appropriately
-# n_tasks <- 3600
-# set_task_track <- data.frame(setting = rep(NA, n_tasks),
-#                              iter = rep(NA, n_tasks))
-# for (i in 1:3600) {
-#   set_task_track$setting[i] <- (i-1) %/% 100 + 1
-#   set_task_track$iter[i] <- (i-1) %% 100 + 1
-# }
+n_tasks <- 900
+set_task_track <- data.frame(setting = rep(NA, n_tasks),
+                             iter = rep(NA, n_tasks))
+for (i in 1:n_tasks) {
+  set_task_track$setting[i] <- (i-1) %/% 25 + 1
+  set_task_track$iter[i] <- (i-1) %% 25 + 1
+}
