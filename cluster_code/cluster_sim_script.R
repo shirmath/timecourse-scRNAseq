@@ -11,7 +11,7 @@ source("../scrnaseq_project_functions.R")
 #Rcpp::sourceCpp("../scrnaseq_project_cpp_functions.cpp")
 
 #GET ARGUMENT FROM BATCH FILE TO GET ITERATION AND SETTING
-task_num <- commandArgs(trailingOnly=TRUE)[1]
+task_num <- as.numeric(commandArgs(trailingOnly=TRUE)[1])
 
   
 #GET ITERATION NUMBER OF TASK FOR KEEPING TRACK OF RESULTS
