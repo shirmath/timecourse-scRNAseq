@@ -24,7 +24,7 @@ sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0
 
 ##### SET ITERATION AND SETTING MANUALLY FOR TESTING ON LOCAL MACHINE
 iteration <- 1
-sim_setting_idx <- 4
+sim_setting_idx <- 1
 
 #set number of samples
 n <- sim_settings[[sim_setting_idx]]$n
@@ -112,8 +112,8 @@ for (i in 1:nsim) {
   
   #fit non-penalized MoM estimator
   init_params <- mom_estimator_cov(temp_data$Y, temp_data$X, O)
-  init_params$M <- c(0, dim = c(m, J, n))
-  init_params$S <- c(2, dim = c(m, J, n))
+  init_params$M <- array(0, dim = c(m, J, n))
+  init_params$S <- array(2, dim = c(m, J, n))
 
   #first, get M and S "optimal" values
   vi_est_init <- vi_estimator2_cov(Y = temp_data$Y, X = temp_data$X, O = O,  
@@ -123,7 +123,7 @@ for (i in 1:nsim) {
                                         init_Sigma = c(init_params$Sigma), 
                                         init_A = c(init_params$A), 
                                         optim_method = "nloptr", 
-                                        max.iter = 1000, 
+                                        max.iter = 2000, 
                                         tol = 1e-4, 
                                         verbose = TRUE, 
                                         skip_coords = c("A", "Sigma", "Beta"), 
@@ -199,32 +199,32 @@ elapsed_time <- end_time - start_time
 print(elapsed_time)
 
 # #SAVE RESULTS
-# # Create directory to store results for this particular sim setting
-# dir.create(paste0("Setting_", sim_setting_idx), showWarnings = FALSE)
-# 
-# #Store the simulated data across sims
-# sim_data_file <- paste0("Setting_",sim_setting_idx,"/sim_data_", iteration, ".RDS")
-# saveRDS(sim_data_list, file = sim_data_file)
-# 
-# #Store beta results
-# beta_file <- paste0("Setting_",sim_setting_idx,"/sim_beta_", iteration, ".RDS")
-# saveRDS(sim_beta_results, file = beta_file)
-# 
-# #Store Sigma results
-# Sigma_file <- paste0("Setting_", sim_setting_idx,"/sim_Sigma_", iteration, ".RDS")
-# saveRDS(sim_Sigma_results, file = Sigma_file)
-# 
-# #Store A results
-# A_file <-paste0("Setting_",sim_setting_idx,"/sim_A_", iteration, ".RDS")
-# saveRDS(sim_A_results, file = A_file)
-# 
-# #Store lambda results
-# lambda_file <- paste0("Setting_",sim_setting_idx,"/sim_lambda_", iteration, ".RDS")
-# saveRDS(sim_lambda_results, file = lambda_file)
-# 
-# #Store lambda results
-# full_A_file <- paste0("Setting_",sim_setting_idx,"/sim_full_A_", iteration, ".RDS")
-# saveRDS(sim_full_A_selection_results, file = full_A_file)
+#Create directory to store results for this particular sim setting
+dir.create(paste0("Setting_", sim_setting_idx), showWarnings = FALSE)
+ 
+#Store the simulated data across sims
+sim_data_file <- paste0("Setting_",sim_setting_idx,"/sim_data_", iteration, ".RDS")
+saveRDS(sim_data_list, file = sim_data_file)
+ 
+#Store beta results
+beta_file <- paste0("Setting_",sim_setting_idx,"/sim_beta_", iteration, ".RDS")
+saveRDS(sim_beta_results, file = beta_file)
+ 
+#Store Sigma results
+Sigma_file <- paste0("Setting_", sim_setting_idx,"/sim_Sigma_", iteration, ".RDS")
+saveRDS(sim_Sigma_results, file = Sigma_file)
+ 
+#Store A results
+A_file <-paste0("Setting_",sim_setting_idx,"/sim_A_", iteration, ".RDS")
+saveRDS(sim_A_results, file = A_file)
+ 
+#Store lambda results
+lambda_file <- paste0("Setting_",sim_setting_idx,"/sim_lambda_", iteration, ".RDS")
+saveRDS(sim_lambda_results, file = lambda_file)
+ 
+#Store lambda results
+full_A_file <- paste0("Setting_",sim_setting_idx,"/sim_full_A_", iteration, ".RDS")
+saveRDS(sim_full_A_selection_results, file = full_A_file)
 
 
 
