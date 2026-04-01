@@ -1562,14 +1562,18 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
                           opts = list(algorithm = "NLOPT_LD_CCSAQ",
                                       xtol_rel = 1e-4,
                                       check_derivatives = FALSE,
-                                      maxeval = n*m*J/10
-                                      #"ftol_rel" = 1e-4
+                                      maxeval = n*m*J
+                                      #ftol_rel = 1e-4
                           ),
                           lb = coord_lower,
                           ub = coord_upper,
                           scale = -1,
                           params = current_params,
                           data = obs)
+        if (verbose) {
+          print(paste0("M,S Opt Status: ",opt_res$status))
+          print(paste0("M,S Opt Message: ",opt_res$message))
+        }
         new_coord_vec <- opt_res$solution
         # if (optim_method == "nloptr") {
         #   opt_res <- nloptr(x0 = coord_current_val_vec,

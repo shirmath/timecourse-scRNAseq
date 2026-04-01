@@ -13,15 +13,14 @@ Rcpp::sourceCpp("../scrnaseq_project_cpp_functions.cpp")
 #GET ITERATION NUMBER OF TASK FOR KEEPING TRACK OF RESULTS
 # The iteration number is passed as a command line argument in the sbatch script:a
 #iteration <- commandArgs(trailingOnly=TRUE)[1]
-iteration <- (task_num - 1) %% 25 + 1
+iteration <- (task_num - 1) %% 50 + 1
 
 #SET UP SETTINGS FOR SIMULATION
 #load sim settings
 load("sim_settings_small.Rdata")
-
 #CHANGE THIS FOR DIFFERENT SIM SETTINGS (RECALL THERE ARE 36 TOTAL SETTINGS)
 #sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0-9]+"))
-sim_setting_idx <- (task_num-1) %/% 25 + 1
+sim_setting_idx <- (task_num-1) %/% 50 + 1
 
 ##### SET ITERATION AND SETTING MANUALLY FOR TESTING ON LOCAL MACHINE
 # iteration <- 1
@@ -47,7 +46,7 @@ beta <- sim_settings[[sim_setting_idx]]$beta
 A_true_supp <- which(A != 0)
 
 #SETUP FOR SIMULATION
-nsim <- 4 #number of sims
+nsim <- 2 #number of sims
 lambda_N <- 100 #number of lambda values
 lambda_min_ratio <- 1/lambda_N # for defining the minimum lambda
 
@@ -98,8 +97,8 @@ for (i in 1:nsim) {
                                         init_Sigma = c(init_params$Sigma), 
                                         init_A = c(init_params$A), 
                                         optim_method = "nloptr", 
-                                        max.iter = 2000, 
-                                        tol = 1e-5, 
+                                        max.iter = 10000, 
+                                        tol = 1e-7, 
                                         verbose = TRUE, 
                                         skip_coords = c("A", "Sigma", "Beta"), 
                                         penalty = FALSE) 
