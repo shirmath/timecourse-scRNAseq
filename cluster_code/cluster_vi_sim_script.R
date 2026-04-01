@@ -10,21 +10,25 @@ library(data.table)
 source("../scrnaseq_project_functions.R")
 Rcpp::sourceCpp("../scrnaseq_project_cpp_functions.cpp")
 
+#GET ARGUMENT FROM BATCH FILE TO GET ITERATION AND SETTING
+task_num <- as.numeric(commandArgs(trailingOnly=TRUE)[1])
+
 #GET ITERATION NUMBER OF TASK FOR KEEPING TRACK OF RESULTS
 # The iteration number is passed as a command line argument in the sbatch script:a
 #iteration <- commandArgs(trailingOnly=TRUE)[1]
-iteration <- (task_num - 1) %% 50 + 1
+iteration <- (task_num - 1) %% 100 + 1
 
 #SET UP SETTINGS FOR SIMULATION
 #load sim settings
 load("sim_settings_small.Rdata")
-#CHANGE THIS FOR DIFFERENT SIM SETTINGS (RECALL THERE ARE 36 TOTAL SETTINGS)
+
+#CHANGE THIS FOR DIFFERENT SIM SETTINGS 
 #sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0-9]+"))
-sim_setting_idx <- (task_num-1) %/% 50 + 1
+sim_setting_idx <- (task_num-1) %/% 100 + 1
 
 ##### SET ITERATION AND SETTING MANUALLY FOR TESTING ON LOCAL MACHINE
 # iteration <- 1
-# sim_setting_idx <- 2
+# sim_setting_idx <- 1
 
 #set number of samples
 n <- sim_settings[[sim_setting_idx]]$n
@@ -46,7 +50,7 @@ beta <- sim_settings[[sim_setting_idx]]$beta
 A_true_supp <- which(A != 0)
 
 #SETUP FOR SIMULATION
-nsim <- 2 #number of sims
+nsim <- 1 #number of sims
 lambda_N <- 100 #number of lambda values
 lambda_min_ratio <- 1/lambda_N # for defining the minimum lambda
 
@@ -87,7 +91,8 @@ for (i in 1:nsim) {
   #fit non-penalized MoM estimator
   init_params <- mom_estimator_cov(temp_data$Y, temp_data$X, O)
   init_params$M <- array(0, dim = c(m, J, n))
-  init_params$S <- array(2, dim = c(m, J, n))
+  init_params$S <- array(1, dim = c(m, J, n))
+  
 
   #first, get M and S "optimal" values
   vi_est_init <- vi_estimator2_cov(Y = temp_data$Y, X = temp_data$X, O = O,  
@@ -98,8 +103,8 @@ for (i in 1:nsim) {
                                         init_A = c(init_params$A), 
                                         optim_method = "nloptr", 
                                         max.iter = 10000, 
-                                        tol = 1e-7, 
-                                        verbose = TRUE, 
+                                        tol = 1e-6, 
+                                        verbose = TRUE,
                                         skip_coords = c("A", "Sigma", "Beta"), 
                                         penalty = FALSE) 
   
