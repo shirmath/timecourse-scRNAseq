@@ -1379,7 +1379,8 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
                           verbose = FALSE, 
                           skip_coords = NA, 
                           penalty = FALSE, 
-                          lambda = 1) {
+                          lambda = 1, 
+                          refit = FALSE) {
 
   #get data sample and parameter dimensions
   obs <- list("Y" = Y, "X" = X, "O" = O)
@@ -1398,11 +1399,14 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
   init_params$Sigma <- matrix(init_Sigma, J, J)
   init_params$A <- matrix(init_A, J, J)
   init_params$Beta <- matrix(c(init_beta), nrow = p+1, ncol = J)
+  
+  #record estimated support of A if not penalized and refit (used for A update step later)
+  A_est_supp <- which(init_params$A != 0)
 
   #set up before starting optimization loop
   param_names <- names(init_params)
   current_params <- init_params
-  current_obj_val <- obj_function2_cov(obs, current_params)
+  current_obj_val <- obj_function2_cov(obs, current_params) + penalty*sum(abs(current_params$A))
   iter <- 0
   converged <- FALSE
 
@@ -1459,6 +1463,7 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
       if (coord_name == "A") {
         
         if (!penalty) {
+          #compute terms necessary for getting non-penalized A update
           M_term1 <- matrix(0, nrow = J, ncol = J)
           M_term2 <- matrix(0, nrow = J, ncol = J)
           for (t in 1:(m-1)) {
@@ -1466,8 +1471,30 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
             M_term2 <- M_term2 + current_params$M[t,,] %*% t(current_params$M[t,,])
           }
           
-          S_sum <- diag(apply(apply(current_params$S,c(1,2),sum)[1:(m-1),], 2, sum))
-          A_update <- M_term1 %*% solve(M_term2 + S_sum)
+          S_sum <- diag(apply(current_params$S[1:(m-1), ,], 2, sum), nrow = J)
+          
+          #update A in non-penalized estimation accordingly based on whether you are fitting full A
+          #or estimating again after having selected support of A from penalized estimator earlier
+          if (!refit) {
+            A_update <- M_term1 %*% solve(M_term2 + S_sum)
+          } else {
+            if (length(A_est_supp) > 0) {
+              K <- kronecker(t(M_term2 + S_sum), diag(1, J))  # (J^2) x (J^2)
+              b <- matrix(c(M_term1), ncol = 1)                          
+              
+              Ks = as.matrix(K[, A_est_supp])
+              fit = lm.fit(x = Ks, y = b)
+              a_hat = fit$coefficients
+              
+              Avec = numeric(J^2)
+              Avec[A_est_supp] = a_hat
+              A_refit = matrix(Avec, nrow = J, ncol = J)  
+              A_update <- A_refit
+            } else {
+              A_update <- numeric(J^2)
+            }
+          }
+          
           new_coord_vec <- c(A_update)
         } else {
           A_update <- vi2_optim2_A(A_init = matrix(coord_current_val_vec, J, J), Sigma = current_params$Sigma, M = current_params$M, S = current_params$S, 
@@ -1529,53 +1556,69 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
         new_coord_vec <- c(Beta_update)
 
       } else {
-        if (optim_method == "nloptr") {
-          opt_res <- nloptr(x0 = coord_current_val_vec,
-                            eval_f = coord_obj,
-                            eval_grad_f = coord_grad,
-                            opts = list(algorithm = "NLOPT_LD_CCSAQ",
-                                        xtol_rel = 1e-4,
-                                        check_derivatives = FALSE
-                                        #"ftol_rel" = 1e-4
-                            ),
-                            lb = coord_lower,
-                            ub = coord_upper,
-                            scale = -1,
-                            params = current_params,
-                            data = obs)
-          new_coord_vec <- opt_res$solution
-
-        } else {
-          if (coord_name == "S") {
-
-            # new_coord_vec <- constrOptim(theta = coord_current_val_vec,
-            #                              f = coord_obj,
-            #                              grad = coord_grad,
-            #                              ui = diag(1, nrow = length(coord_current_val_vec)),
-            #                              ci = matrix(1e-2, nrow = length(coord_current_val_vec), ncol = 1),
-            #                              scale = -1,
-            #                              params = current_params,
-            #                              data = obs)$par
-            
-            new_coord_vec <- optim(par = coord_current_val_vec,
-                                   method = "L-BFGS-B",
-                                   fn = coord_obj,
-                                   gr = coord_grad,
-                                   scale = -1,
-                                   params = current_params,
-                                   data = obs,
-                                   lower = coord_lower,
-                                   upper = coord_upper)$par
-          } else {
-            new_coord_vec <- optim(par = coord_current_val_vec,
-                                   method = "BFGS",
-                                   fn = coord_obj,
-                                   gr = coord_grad,
-                                   scale = -1,
-                                   params = current_params,
-                                   data = obs)$par
-          }
-        }
+        opt_res <- nloptr(x0 = coord_current_val_vec,
+                          eval_f = coord_obj,
+                          eval_grad_f = coord_grad,
+                          opts = list(algorithm = "NLOPT_LD_CCSAQ",
+                                      xtol_rel = 1e-4,
+                                      check_derivatives = FALSE,
+                                      maxeval = n*m*J/10
+                                      #"ftol_rel" = 1e-4
+                          ),
+                          lb = coord_lower,
+                          ub = coord_upper,
+                          scale = -1,
+                          params = current_params,
+                          data = obs)
+        new_coord_vec <- opt_res$solution
+        # if (optim_method == "nloptr") {
+        #   opt_res <- nloptr(x0 = coord_current_val_vec,
+        #                     eval_f = coord_obj,
+        #                     eval_grad_f = coord_grad,
+        #                     opts = list(algorithm = "NLOPT_LD_CCSAQ",
+        #                                 xtol_rel = 1e-4,
+        #                                 check_derivatives = FALSE,
+        #                                 maxeval = 10000
+        #                                 #"ftol_rel" = 1e-4
+        #                     ),
+        #                     lb = coord_lower,
+        #                     ub = coord_upper,
+        #                     scale = -1,
+        #                     params = current_params,
+        #                     data = obs)
+        #   new_coord_vec <- opt_res$solution
+        # 
+        # } else {
+        #   if (coord_name == "S") {
+        # 
+        #     # new_coord_vec <- constrOptim(theta = coord_current_val_vec,
+        #     #                              f = coord_obj,
+        #     #                              grad = coord_grad,
+        #     #                              ui = diag(1, nrow = length(coord_current_val_vec)),
+        #     #                              ci = matrix(1e-2, nrow = length(coord_current_val_vec), ncol = 1),
+        #     #                              scale = -1,
+        #     #                              params = current_params,
+        #     #                              data = obs)$par
+        #     
+        #     new_coord_vec <- optim(par = coord_current_val_vec,
+        #                            method = "L-BFGS-B",
+        #                            fn = coord_obj,
+        #                            gr = coord_grad,
+        #                            scale = -1,
+        #                            params = current_params,
+        #                            data = obs,
+        #                            lower = coord_lower,
+        #                            upper = coord_upper)$par
+        #   } else {
+        #     new_coord_vec <- optim(par = coord_current_val_vec,
+        #                            method = "BFGS",
+        #                            fn = coord_obj,
+        #                            gr = coord_grad,
+        #                            scale = -1,
+        #                            params = current_params,
+        #                            data = obs)$par
+        #   }
+        # }
 
       }
 
@@ -1590,7 +1633,7 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
     }
 
     #check if converged according to some criterion
-    current_obj_val <- obj_function2_cov(obs, current_params)
+    current_obj_val <- obj_function2_cov(obs, current_params) + sum(abs(current_params$A))
     rel_diff <- abs((current_obj_val - past_obj_val)/past_obj_val)
     
     if (verbose) {
@@ -1715,7 +1758,7 @@ vi2_optim_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter
 
 
 #SLOW ISTA OPTIMIZER
-vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter = 20000000) {
+vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter = 20000000, verbose = FALSE) {
   
   #get number of categories
   J <- nrow(Sigma)
@@ -1727,14 +1770,14 @@ vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.ite
   }
   
   #compute fixed step size
-  print(paste0("Sigma determinant: ", det(Sigma)))
+  if (verbose) {print(paste0("Sigma determinant: ", det(Sigma)))}
   
   Omega <- solve(Sigma)
   S_all <- diag(apply(S[1:(m-1), ,], c(2), sum))
   Mt_M <- matrix(apply(apply(M[1:(m-1),,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
   quad_term <- S_all + Mt_M
   Lconst <- norm(Omega %*% quad_term, type = "F")
-  print(paste0("Lconst value: ", Lconst))
+  if (verbose) {print(paste0("Lconst value: ", Lconst))}
   step <- 1 / Lconst
   
   #set up vars for optimization loop
@@ -1747,7 +1790,10 @@ vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.ite
   obj_prev <- -sum(diag((A_prev %*% Mt_M1 -0.5*(A_prev %*% quad_term %*% t(A_prev))) %*% Omega))
   
   for (it in 1:max.iter) {
-    if (it %% 1000 == 0) {print(paste0("Iter ", it-1, " Obj: ", obj_prev))}
+    if (verbose & it %% 1000 == 0) {
+      print(paste0("Iter ", it-1, " Obj: ", obj_prev))
+    }
+    
     
     A_grad <- -Omega %*% (t(Mt_M1) - A_prev %*% quad_term) 
     A_new <- sign(A_prev - step * A_grad)*pmax(abs(A_prev - step * A_grad) - step * lambda, 0)
@@ -1766,7 +1812,7 @@ vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.ite
     #tk = tk_new
     obj_prev = obj_new
   }
-  print(paste0("A optim iters: ", it))
+  if (verbose) {print(paste0("A optim iters: ", it))}
   A_prev
 }
 
@@ -1839,6 +1885,97 @@ mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_e
   
   return(list("bic_results" = selection_results,
               "A_est_results" = full_A_est))
+}
+
+#FUNCTION TO FIT PENALIZED VI ESTIMATOR FOR A GRID OF LAMBDAS AND RETURN SELECTION CRITERIA AND ESTIMATES FOR EACH LAMBDA
+# Y should be array of observed counts with dimensions time x categories x samples
+# X should be array of covariates with dimensions time x number of covariates (no intercept) x samples (only needed if covariates = TRUE)
+# O should be offset matrix with dimensions time x samples (only needed if covariates = TRUE)
+# init_params should be list of parameters to use as starting point for estimation (include A as part of this list)
+# lambda_grid should be grid of lambdas for which you want to fit penalized VI estimator
+# covariates is boolean that indicates whether to use VI estimator for model with covariates or the one for model without covariates
+vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covariates = TRUE, verbose = FALSE) {
+  
+  #get quantities needed for later computations and storing results
+  m <- dim(Y)[1]
+  n <- dim(Y)[3]
+  J <- nrow(init_params$A)
+  lambda_N <- length(lambda_grid)
+  n_lags <- (m-1)*n
+  list_data <- list("Y" = Y, "X" = X, "O" = O)
+  
+  #set up data frame for storing relevant high level results
+  #bic is computed using n*(m-1) as sample size in BIC computation
+  #bic2 is computed using n as sample size in BIC computation
+  selection_results <- data.table("lambda" = lambda_grid,
+                                  "edges" = rep(NA, lambda_N),
+                                  "bic" = rep(NA, lambda_N),
+                                  "bic2" = rep(NA, lambda_N),
+                                  "bic3" = rep(NA, lambda_N))
+  
+  #set up list to store estimated parameters for each lambda
+  full_estimates <- vector(mode = "list")
+  
+  
+  for (j in 1:lambda_N) {
+    
+    #get current value of lambda
+    l <- lambda_grid[j] 
+    
+    #print out which iteration if verbose
+    if (verbose) {print(paste0("Fitting for ", j, "-th lambda in grid, which is ", l))}
+    
+    #fit penalized estimate
+    A_est <- vi_estimator2_cov(Y = Y, X = X, O = O,
+                                    init_beta = c(init_params$Beta),
+                                    # init_M = c(as.numeric(init_params$M)),
+                                    # init_S = c(init_params$S),
+                                    init_M = c(vi_est_init$M),
+                                    init_S = c(vi_est_init$S),
+                                    init_Sigma = c(init_params$Sigma),
+                                    init_A = c(init_params$A),
+                                    optim_method = "optim",
+                                    max.iter = 10000,
+                                    tol = 1e-6,
+                                    verbose = FALSE,
+                                    skip_coords = NA,
+                                    #skip_coords = c("M", "S"),
+                                    penalty = TRUE,
+                                    lambda = l)$A
+    
+    
+    #record selected support of A for current lambda 
+    A_est_supp <- which(A_est != 0)
+    selection_results$edges[j] <- length(A_est_supp)
+    
+    
+    #refit based on estimated support of A
+    full_estimates[[j]] <- vi_pen_refit <- vi_estimator2_cov(Y = Y, X = X, O = O,
+                                      init_beta = c(init_params$Beta),
+                                      # init_M = c(as.numeric(init_params$M)),
+                                      # init_S = c(init_params$S),
+                                      init_M = c(vi_est_init$M),
+                                      init_S = c(vi_est_init$S),
+                                      init_Sigma = c(init_params$Sigma),
+                                      init_A = c(A_est),
+                                      optim_method = "optim",
+                                      max.iter = 1000,
+                                      tol = 1e-6,
+                                      verbose = FALSE,
+                                      skip_coords = NA,
+                                      #skip_coords = c("A", "M", "S"),
+                                      penalty = FALSE,
+                                      refit = TRUE)
+    
+    
+    #compute criteria for each lambda
+    selection_results$bic[j] <- -2*obj_function2_cov(data = list_data, params = vi_pen_refit) + log(n_lags)*length(A_est_supp)
+    selection_results$bic2[j] <- -2*obj_function2_cov(data = list_data, params = vi_pen_refit) + log(n)*length(A_est_supp) 
+    
+  }
+  
+  return(list("bic_results" = selection_results,
+              "full_est_results" = full_estimates))
 }
 
 

@@ -12,19 +12,20 @@ Rcpp::sourceCpp("../scrnaseq_project_cpp_functions.cpp")
 
 #GET ITERATION NUMBER OF TASK FOR KEEPING TRACK OF RESULTS
 # The iteration number is passed as a command line argument in the sbatch script:a
-iteration <- commandArgs(trailingOnly=TRUE)[1]
+#iteration <- commandArgs(trailingOnly=TRUE)[1]
+iteration <- (task_num - 1) %% 100 + 1
 
 #SET UP SETTINGS FOR SIMULATION
 #load sim settings
-load("sim_settings.Rdata")
+load("sim_settings_small.Rdata")
 
 #CHANGE THIS FOR DIFFERENT SIM SETTINGS (RECALL THERE ARE 36 TOTAL SETTINGS)
-sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0-9]+"))
-
+#sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0-9]+"))
+sim_setting_idx <- (task_num-1) %/% 100 + 1
 
 ##### SET ITERATION AND SETTING MANUALLY FOR TESTING ON LOCAL MACHINE
-iteration <- 1
-sim_setting_idx <- 1
+# iteration <- 1
+# sim_setting_idx <- 2
 
 #set number of samples
 n <- sim_settings[[sim_setting_idx]]$n
@@ -42,63 +43,37 @@ A <- sim_settings[[sim_setting_idx]]$A
 Sigma <- sim_settings[[sim_setting_idx]]$Sigma
 beta <- sim_settings[[sim_setting_idx]]$beta
 
-#TRY CODE WITH SMALLER DIMENSIONS
-# #set number of samples
-# n <- 100
-# #set number of timepoints per sample
-# m <- 5
-# #set number of categories
-# J <- 4
-# #set number of covariates (excluding intercept)
-# p <- 4
-# #compute number of lags
-# n_lags <- n*(m-1)
-# 
-# #set parameter values according to specifications above
-# A <-  matrix(sparseMatrix(i = 1:J, j = sample(1:J, J), x = 0.5, dims = c(J,J)), J, J)
-# Sigma <- diag(0.5, nrow = J, ncol = J)
-# beta <- rbind(rnorm(J, mean = 0.2, sd = 0.1),
-#               matrix(rnorm((p)*J, mean = 0, sd = 0.2), nrow = p, ncol = J))
-
 #record true support of A (used for selection of best model with oracle knowledge in simulations)
 A_true_supp <- which(A != 0)
 
 #SETUP FOR SIMULATION
 nsim <- 1 #number of sims
-lambda_N <- 10 #number of lambda values
-lambda_min_ratio <- 0.01 # for defining the minimum lambda
+lambda_N <- 100 #number of lambda values
+lambda_min_ratio <- 1/lambda_N # for defining the minimum lambda
 
 #set up lists and arrays to store simulated data for each iter and results
 sim_data_list <- vector(mode = "list")
-sim_beta_results <- array(NA, dim = c(2,p,J,nsim),
-                          dimnames = list("est_method" = c("mom_nopen", "mom_pen"),
-                                          "row" = 1:p,
+sim_beta_results <- array(NA, dim = c(p,J,nsim),
+                          dimnames = list("row" = 1:p,
                                           "column" = 1:J,
                                           "iter" = 1:nsim))
 
-sim_Sigma_Z_results <- array(NA, dim = c(2,J,J,nsim),
-                             dimnames = list("est_method" = c("mom_nopen", "mom_pen"),
-                                             "row" = 1:J,
-                                             "column" = 1:J,
-                                             "iter" = 1:nsim))
-
-sim_Sigma_results <- array(NA, dim = c(2,J,J,nsim),
-                           dimnames = list("est_method" = c("mom_nopen", "mom_pen"),
-                                           "row" = 1:J,
+sim_Sigma_results <- array(NA, dim = c(J,J,nsim),
+                           dimnames = list("row" = 1:J,
                                            "column" = 1:J,
                                            "iter" = 1:nsim))
 
-sim_A_results <- array(NA, dim = c(3,J, J,nsim),
-                       dimnames = list("est_method" = c("mom_nopen", "mom_pen_bic", "mom_pen_oracle"),
+sim_A_results <- array(NA, dim = c(4,J, J,nsim),
+                       dimnames = list("est_method" = c("vi_nopen", "vi_pen_bic", "vi_pen_bic2", "vi_pen_oracle"),
                                        "row" = 1:J,
                                        "column" = 1:J,
                                        "iter" = 1:nsim))
 
-sim_lambda_results <- array(NA, dim = c(2, nsim),
-                            dimnames = list("selection_criteria" = c("bic", "oracle"),
+sim_lambda_results <- array(NA, dim = c(3, nsim),
+                            dimnames = list("selection_criteria" = c("bic", "bic2", "oracle"),
                                             "iter" = 1:nsim))
 
-sim_full_A_selection_results <- vector(mode = "list")
+sim_full_selection_results <- vector(mode = "list")
 
 # RUN SIMULATION RUNS
 #run simulation
@@ -118,30 +93,37 @@ for (i in 1:nsim) {
   #first, get M and S "optimal" values
   vi_est_init <- vi_estimator2_cov(Y = temp_data$Y, X = temp_data$X, O = O,  
                                         init_beta = c(init_params$Beta), 
-                                        init_M = c(as.numeric(init_params$M)), 
+                                        init_M = c(init_params$M), 
                                         init_S = c(init_params$S), 
                                         init_Sigma = c(init_params$Sigma), 
                                         init_A = c(init_params$A), 
                                         optim_method = "nloptr", 
                                         max.iter = 2000, 
-                                        tol = 1e-4, 
+                                        tol = 1e-5, 
                                         verbose = TRUE, 
                                         skip_coords = c("A", "Sigma", "Beta"), 
                                         penalty = FALSE) 
   
+  
   #fit non-penalized VI estimator
   vi_est_nopen <- vi_estimator2_cov(Y = temp_data$Y, X = temp_data$X, O = O,  
                                     init_beta = c(init_params$Beta), 
-                                    init_M = c(as.numeric(vi_est_init$M)), 
+                                    init_M = c(vi_est_init$M), 
                                     init_S = c(vi_est_init$S), 
                                     init_Sigma = c(init_params$Sigma), 
                                     init_A = c(init_params$A), 
                                     optim_method = "optim", 
-                                    max.iter = 1000, 
-                                    tol = 1e-7, 
-                                    verbose = FALSE, 
-                                    skip_coords = c("M","S"), 
+                                    max.iter = 2000, 
+                                    tol = 1e-6, 
+                                    verbose = TRUE, 
+                                    #skip_coords = c("M","S"), 
+                                    skip_coords = NA,
                                     penalty = FALSE) 
+  
+  #record results for non-penalized estimator
+  sim_beta_results[ , ,i] <- vi_est_nopen$Beta
+  sim_Sigma_results[ , ,i] <- vi_est_nopen$Sigma
+  sim_A_results["vi_nopen", , ,i] <- vi_est_nopen$A
   
   #fit penalized VI estimator
   #set lambda max based on estimates from M, S optimization
@@ -160,43 +142,44 @@ for (i in 1:nsim) {
   lambda_max <- max(abs(A_mom - (1/Lconst)*A_grad))*Lconst #this lambda guarantees 0 selected edges
   
   #set up lambda grid
-  lambda_N <- 10 #number of lambda values
-  lambda_min_ratio <- 1/lambda_N # for defining the minimum lambda
   lambda_grid <- exp(seq(log(lambda_max), log(lambda_max * lambda_min_ratio), length.out = lambda_N))
   
-  #fit penalized estimates over lambda grid
-  vi_pen_estimates <- vector(mode = "list")
-  for (l_idx in 1:lambda_N) {
-    print(l_idx)
-    vi_pen_estimates[[l_idx]] <- vi_estimator2_cov(Y = temp_data$Y, X = temp_data$X, O = temp_data$O,
-                                                    init_beta = c(init_params$Beta),
-                                                    # init_M = c(as.numeric(init_params$M)),
-                                                    # init_S = c(init_params$S),
-                                                    init_M = c(vi_est_init$M),
-                                                    init_S = c(vi_est_init$S),
-                                                    init_Sigma = c(init_params$Sigma),
-                                                    init_A = c(init_params$A),
-                                                    optim_method = "optim",
-                                                    max.iter = 10000,
-                                                    tol = 1e-6,
-                                                    verbose = FALSE,
-                                                    #skip_coords = NA,
-                                                    skip_coords = c("M", "S"),
-                                                    penalty = TRUE,
-                                                    lambda = lambda_grid[l_idx])
-    
-  }
+  #fit penalized vi estimator over grid of lambdas and compute selection criteria
+  vi_pen_results <- vi_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = temp_data$O,
+                                                     init_params = vi_est_init,
+                                                     lambda_grid = lambda_grid,
+                                                     verbose = TRUE)
   
+  #get index of selected lambda according to BIC criteria
+  bic_selected_idx <- which.min(vi_pen_results$bic_results$bic)
+  bic2_selected_idx <- which.min(vi_pen_results$bic_results$bic2)
+  #get index of oracle selected lambda
+  selected_edges <- lapply(vi_pen_results$full_est_results, function (x) {which(x$A != 0)})
+  tpr_edges_df <- data.frame("lambda" = lambda_grid,
+                             "tpr" = sapply(selected_edges, function (x) {length(intersect(x, A_true_supp))/length(A_true_supp)}),
+                             "edges" = sapply(selected_edges, function (x) {length(x)}))
+  oracle_selected_lambda <- tpr_edges_df %>% 
+    filter(tpr == max(tpr_edges_df$tpr)) %>%
+    filter(edges == min(edges)) %>%
+    dplyr::select(lambda) %>%
+    pull() %>%
+    min()
   
-  
+  #record results
+  oracle_selected_idx <- which(tpr_edges_df$lambda == oracle_selected_lambda)
+  sim_A_results["vi_pen_bic", , ,i] <- vi_pen_results$full_est_results[[bic_selected_idx]]$A
+  sim_A_results["vi_pen_bic2", , ,i] <- vi_pen_results$full_est_results[[bic2_selected_idx]]$A
+  sim_A_results["vi_pen_oracle", , ,i] <- vi_pen_results$full_est_results[[oracle_selected_idx]]$A
+  sim_lambda_results["bic", i] <- lambda_grid[bic_selected_idx]
+  sim_lambda_results["bic2", i] <- lambda_grid[bic2_selected_idx]
+  sim_lambda_results["oracle", i] <- lambda_grid[oracle_selected_idx]
 
-  #store penalized A results to the list set up for that
-  sim_full_A_selection_results[[i]] <- vi_pen_estimates
+  #store full penalized estimator results to the list set up for that
+  sim_full_selection_results[[i]] <- vi_pen_results
 }
-end_time <- Sys.time()
-elapsed_time <- end_time - start_time
 
-print(elapsed_time)
+end_time <- Sys.time()
+print(end_time - start_time)
 
 # #SAVE RESULTS
 #Create directory to store results for this particular sim setting
@@ -223,8 +206,8 @@ lambda_file <- paste0("Setting_",sim_setting_idx,"/sim_lambda_", iteration, ".RD
 saveRDS(sim_lambda_results, file = lambda_file)
  
 #Store lambda results
-full_A_file <- paste0("Setting_",sim_setting_idx,"/sim_full_A_", iteration, ".RDS")
-saveRDS(sim_full_A_selection_results, file = full_A_file)
+full_file <- paste0("Setting_",sim_setting_idx,"/sim_full_", iteration, ".RDS")
+saveRDS(sim_full_selection_results, file = full_file)
 
 
 

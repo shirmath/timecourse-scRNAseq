@@ -6,11 +6,22 @@ library(MASS)
 library(Matrix)
 
 #create vectors for all parameters necessary to set up parameters for various simulation setting with each vector containing all values we want to use across settings
-n <- c(100, 500) #sample size
-J <- c(25, 50) #number of categories
-m <- 30 #number timepoints
-p <- 5 #number of covariates
-A_vals <- Sigma_vals <- c(0.2, 0.5, 0.8)
+large <- FALSE
+
+if (large) {
+  n <- c(100, 500) #sample size
+  J <- c(25, 50) #number of categories
+  m <- 30 #number timepoints
+  p <- 5 #number of covariates
+  A_vals <- Sigma_vals <- c(0.2, 0.5, 0.8)
+} else {
+  n <- c(100, 250) #sample size
+  J <- c(5, 10) #number of categories
+  m <- 5 #number timepoints
+  p <- 4 #number of covariates
+  A_vals <- Sigma_vals <- c(0.2, 0.5, 0.8)
+}
+
 
 settings_df <- expand.grid(n = n, J = J, m = m, p = p, A_val = A_vals, Sigma_val = Sigma_vals)
 total_settings <- nrow(settings_df)
@@ -64,4 +75,9 @@ for (i in 1:total_settings) {
   sim_settings[[i]]$p <- settings_df$p[i]
 }
 
-save(sim_settings, file = "sim_settings.Rdata")
+if (large) {
+  save(sim_settings, file = paste0("sim_settings_large.Rdata"))
+} else {
+  save(sim_settings, file = paste0("sim_settings_small.Rdata"))
+}
+
