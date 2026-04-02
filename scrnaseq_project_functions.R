@@ -128,6 +128,7 @@ mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
       if (i != j) {
         #compute terms necessary for estimator
         Y_ij_mean <- mean(apply(Y, 3, function (x) x[,i]*x[,j]))
+        if (Y_ij_mean == 0) {print(paste0("none together of ", i, " and ", j, "!"))}
         #compute estimate for ij element
         Sigma_Z_hat[i,j] <- log(Y_ij_mean) - log(Y_mean[i]) - log(Y_mean[j])
       }
@@ -1914,8 +1915,7 @@ vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covari
   selection_results <- data.table("lambda" = lambda_grid,
                                   "edges" = rep(NA, lambda_N),
                                   "bic" = rep(NA, lambda_N),
-                                  "bic2" = rep(NA, lambda_N),
-                                  "bic3" = rep(NA, lambda_N))
+                                  "bic2" = rep(NA, lambda_N))
   
   #set up list to store estimated parameters for each lambda
   full_estimates <- vector(mode = "list")

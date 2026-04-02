@@ -15,11 +15,11 @@ if (large) {
   p <- 5 #number of covariates
   A_vals <- Sigma_vals <- c(0.3, 0.5, 0.8)
 } else {
-  n <- 250 #sample size
+  n <- c(100,200) #sample size
   J <- 5 #number of categories
   m <- 5 #number timepoints
   p <- 4 #number of covariates
-  A_vals <- Sigma_vals <- c(0.5, 0.8)
+  A_vals <- Sigma_vals <- c(0.2, 0.5, 0.8)
 }
 
 

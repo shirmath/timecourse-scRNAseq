@@ -16,7 +16,7 @@ task_num <- as.numeric(commandArgs(trailingOnly=TRUE)[1])
 #GET ITERATION NUMBER OF TASK FOR KEEPING TRACK OF RESULTS
 # The iteration number is passed as a command line argument in the sbatch script:a
 #iteration <- commandArgs(trailingOnly=TRUE)[1]
-iteration <- (task_num - 1) %% 100 + 1
+iteration <- (task_num - 1) %% 50 + 1
 
 #SET UP SETTINGS FOR SIMULATION
 #load sim settings
@@ -24,11 +24,11 @@ load("sim_settings_small.Rdata")
 
 #CHANGE THIS FOR DIFFERENT SIM SETTINGS 
 #sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0-9]+"))
-sim_setting_idx <- (task_num-1) %/% 100 + 1
+sim_setting_idx <- (task_num-1) %/% 50 + 1
 
 ##### SET ITERATION AND SETTING MANUALLY FOR TESTING ON LOCAL MACHINE
 # iteration <- 1
-# sim_setting_idx <- 1
+# sim_setting_idx <- 2
 
 #set number of samples
 n <- sim_settings[[sim_setting_idx]]$n
@@ -50,7 +50,7 @@ beta <- sim_settings[[sim_setting_idx]]$beta
 A_true_supp <- which(A != 0)
 
 #SETUP FOR SIMULATION
-nsim <- 1 #number of sims
+nsim <- 2 #number of sims
 lambda_N <- 100 #number of lambda values
 lambda_min_ratio <- 1/lambda_N # for defining the minimum lambda
 
@@ -94,35 +94,34 @@ for (i in 1:nsim) {
   init_params$S <- array(1, dim = c(m, J, n))
   
 
-  #first, get M and S "optimal" values
-  vi_est_init <- vi_estimator2_cov(Y = temp_data$Y, X = temp_data$X, O = O,  
+  #fit non-penalized VI estimator
+  vi_est_nopen <- vi_estimator2_cov(Y = temp_data$Y, X = temp_data$X, O = O,  
                                         init_beta = c(init_params$Beta), 
                                         init_M = c(init_params$M), 
                                         init_S = c(init_params$S), 
-                                        init_Sigma = c(init_params$Sigma), 
-                                        init_A = c(init_params$A), 
+                                        init_Sigma = c(diag(1, J)), 
+                                        init_A = rep(0, J^2), 
                                         optim_method = "nloptr", 
                                         max.iter = 10000, 
-                                        tol = 1e-6, 
+                                        tol = 1e-7, 
                                         verbose = TRUE,
-                                        skip_coords = c("A", "Sigma", "Beta"), 
                                         penalty = FALSE) 
   
   
   #fit non-penalized VI estimator
-  vi_est_nopen <- vi_estimator2_cov(Y = temp_data$Y, X = temp_data$X, O = O,  
-                                    init_beta = c(init_params$Beta), 
-                                    init_M = c(vi_est_init$M), 
-                                    init_S = c(vi_est_init$S), 
-                                    init_Sigma = c(init_params$Sigma), 
-                                    init_A = c(init_params$A), 
-                                    optim_method = "optim", 
-                                    max.iter = 2000, 
-                                    tol = 1e-6, 
-                                    verbose = TRUE, 
-                                    #skip_coords = c("M","S"), 
-                                    skip_coords = NA,
-                                    penalty = FALSE) 
+  # vi_est_nopen <- vi_estimator2_cov(Y = temp_data$Y, X = temp_data$X, O = O,  
+  #                                   init_beta = c(init_params$Beta), 
+  #                                   init_M = c(vi_est_init$M), 
+  #                                   init_S = c(vi_est_init$S), 
+  #                                   init_Sigma = c(init_params$Sigma), 
+  #                                   init_A = c(init_params$A), 
+  #                                   optim_method = "optim", 
+  #                                   max.iter = 2000, 
+  #                                   tol = 1e-6, 
+  #                                   verbose = TRUE, 
+  #                                   #skip_coords = c("M","S"), 
+  #                                   skip_coords = NA,
+  #                                   penalty = FALSE) 
   
   #record results for non-penalized estimator
   sim_beta_results[ , ,i] <- vi_est_nopen$Beta
@@ -132,14 +131,14 @@ for (i in 1:nsim) {
   #fit penalized VI estimator
   #set lambda max based on estimates from M, S optimization
   #find lambda that will guarantee zero A
-  A_mom <-vi_est_init$A
-  Omega <- solve(vi_est_init$Sigma)
-  S_all <- diag(apply(vi_est_init$S[1:(m-1), ,], c(2), sum))
-  Mt_M <- matrix(apply(apply(vi_est_init$M[1:(m-1),,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
+  A_mom <- matrix(0, J, J)
+  Omega <- diag(1, J)
+  S_all <- diag(apply(vi_est_nopen$S[1:(m-1), ,], c(2), sum))
+  Mt_M <- matrix(apply(apply(vi_est_nopen$M[1:(m-1),,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
   quad_term <- S_all + Mt_M
   Mt_M1 <- matrix(0, J, J)
   for (t in 1:(m-1)) {
-    Mt_M1 <- Mt_M1 + vi_est_init$M[t,,] %*% t(vi_est_init$M[t+1,,])
+    Mt_M1 <- Mt_M1 + vi_est_nopen$M[t,,] %*% t(vi_est_nopen$M[t+1,,])
   }
   A_grad <- -Omega %*% (t(Mt_M1) - A_mom %*% quad_term)
   Lconst <- norm(Omega %*% quad_term, type = "F")
@@ -150,7 +149,7 @@ for (i in 1:nsim) {
   
   #fit penalized vi estimator over grid of lambdas and compute selection criteria
   vi_pen_results <- vi_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = temp_data$O,
-                                                     init_params = vi_est_init,
+                                                     init_params = vi_est_nopen,
                                                      lambda_grid = lambda_grid,
                                                      verbose = TRUE)
   
