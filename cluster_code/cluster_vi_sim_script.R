@@ -27,8 +27,8 @@ load("sim_settings_small.Rdata")
 sim_setting_idx <- (task_num-1) %/% 50 + 1
 
 ##### SET ITERATION AND SETTING MANUALLY FOR TESTING ON LOCAL MACHINE
-# iteration <- 1
-# sim_setting_idx <- 2
+iteration <- 1
+sim_setting_idx <- 1
 
 #set number of samples
 n <- sim_settings[[sim_setting_idx]]$n
@@ -50,8 +50,8 @@ beta <- sim_settings[[sim_setting_idx]]$beta
 A_true_supp <- which(A != 0)
 
 #SETUP FOR SIMULATION
-nsim <- 2 #number of sims
-lambda_N <- 100 #number of lambda values
+nsim <- 1 #number of sims
+lambda_N <- 5 #number of lambda values
 lambda_min_ratio <- 1/lambda_N # for defining the minimum lambda
 
 #set up lists and arrays to store simulated data for each iter and results
