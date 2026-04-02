@@ -134,6 +134,9 @@ mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
       }
     }
   }
+  
+  colnames(Sigma_Z_hat) <- unlist(dimnames(Y)[2])
+  rownames(Sigma_Z_hat) <- unlist(dimnames(Y)[2])
 
   #estimator for A
   P <- matrix(NA, nrow = J, ncol = J)
@@ -145,6 +148,8 @@ mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
       P[j,k] <- log(Y_jk_mean) - log(Y_mean[j]) - log(Y_mean[k])
     }
   }
+  colnames(P) <- unlist(dimnames(Y)[2])
+  rownames(P) <- unlist(dimnames(Y)[2])
   
   if (!penalty) {
     A_hat <- P %*% solve(Sigma_Z_hat)
@@ -1940,7 +1945,7 @@ vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covari
                                     init_A = c(init_params$A),
                                     optim_method = "optim",
                                     max.iter = 10000,
-                                    tol = 1e-6,
+                                    tol = 1e-5,
                                     verbose = FALSE,
                                     skip_coords = NA,
                                     #skip_coords = c("M", "S"),
@@ -1964,7 +1969,7 @@ vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covari
                                       init_A = c(A_est),
                                       optim_method = "optim",
                                       max.iter = 1000,
-                                      tol = 1e-6,
+                                      tol = 1e-5,
                                       verbose = FALSE,
                                       skip_coords = NA,
                                       #skip_coords = c("A", "M", "S"),

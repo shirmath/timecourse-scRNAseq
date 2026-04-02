@@ -27,8 +27,8 @@ load("sim_settings_small.Rdata")
 sim_setting_idx <- (task_num-1) %/% 50 + 1
 
 ##### SET ITERATION AND SETTING MANUALLY FOR TESTING ON LOCAL MACHINE
-iteration <- 1
-sim_setting_idx <- 1
+# iteration <- 1
+# sim_setting_idx <- 2
 
 #set number of samples
 n <- sim_settings[[sim_setting_idx]]$n
@@ -51,7 +51,7 @@ A_true_supp <- which(A != 0)
 
 #SETUP FOR SIMULATION
 nsim <- 1 #number of sims
-lambda_N <- 5 #number of lambda values
+lambda_N <- 100 #number of lambda values
 lambda_min_ratio <- 1/lambda_N # for defining the minimum lambda
 
 #set up lists and arrays to store simulated data for each iter and results
@@ -103,7 +103,7 @@ for (i in 1:nsim) {
                                         init_A = rep(0, J^2), 
                                         optim_method = "nloptr", 
                                         max.iter = 10000, 
-                                        tol = 1e-7, 
+                                        tol = 1e-5, 
                                         verbose = TRUE,
                                         penalty = FALSE) 
   
@@ -148,8 +148,13 @@ for (i in 1:nsim) {
   lambda_grid <- exp(seq(log(lambda_max), log(lambda_max * lambda_min_ratio), length.out = lambda_N))
   
   #fit penalized vi estimator over grid of lambdas and compute selection criteria
+  init_pen_params <- init_params
+  init_pen_params$A <- matrix(0, J, J)
+  init_pen_params$Sigma <- diag(1, J)
+  init_pen_params$M <- vi_est_nopen$M
+  init_pen_params$S <- vi_est_nopen$S
   vi_pen_results <- vi_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = temp_data$O,
-                                                     init_params = vi_est_nopen,
+                                                     init_params = init_pen_params,
                                                      lambda_grid = lambda_grid,
                                                      verbose = TRUE)
   
