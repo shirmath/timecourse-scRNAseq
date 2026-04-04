@@ -157,11 +157,3 @@ saveRDS(sim_lambda_results, file = lambda_file)
 full_A_file <- paste0("Setting_",sim_setting_idx,"/sim_full_A_", iteration, ".RDS")
 saveRDS(sim_full_A_selection_results, file = full_A_file)
 
-# ## check that with tasks 1-3600, you can get setting and iteration appropriately
-n_tasks <- 900
-set_task_track <- data.frame(setting = rep(NA, n_tasks),
-                             iter = rep(NA, n_tasks))
-for (i in 1:n_tasks) {
-  set_task_track$setting[i] <- (i-1) %/% 25 + 1
-  set_task_track$iter[i] <- (i-1) %% 25 + 1
-}

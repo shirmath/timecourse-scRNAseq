@@ -113,8 +113,8 @@ mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
   J <- dim(Y)[2]
 
   #quantities needed for estimation
-  Y_mean <- apply(Y, c(2), mean)
-  Y2_mean <- apply(Y^2, c(2), mean)
+  Y_mean <- apply(Y, c(2), function(x) {mean(x, na.rm = TRUE)})
+  Y2_mean <- apply(Y^2, c(2), function(x) {mean(x, na.rm = TRUE)})
 
   #estimator for mu
   mu_hat <- 2*log(Y_mean) - 0.5*log(Y2_mean - Y_mean)
@@ -127,8 +127,7 @@ mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
     for(j in 1:J) {
       if (i != j) {
         #compute terms necessary for estimator
-        Y_ij_mean <- mean(apply(Y, 3, function (x) x[,i]*x[,j]))
-        if (Y_ij_mean == 0) {print(paste0("none together of ", i, " and ", j, "!"))}
+        Y_ij_mean <- mean(apply(Y, 3, function (x) x[,i]*x[,j]), na.rm = TRUE)
         #compute estimate for ij element
         Sigma_Z_hat[i,j] <- log(Y_ij_mean) - log(Y_mean[i]) - log(Y_mean[j])
       }
@@ -143,7 +142,7 @@ mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
   for (j in 1:J) {
     for(k in 1:J) {
       #compute terms necessary for estimator
-      Y_jk_mean <- mean(apply(Y, 3, function (x) x[2:m,j]*x[1:(m-1),k]))
+      Y_jk_mean <- mean(apply(Y, 3, function (x) x[2:m,j]*x[1:(m-1),k]), na.rm = TRUE)
       #compute estimate for ij element
       P[j,k] <- log(Y_jk_mean) - log(Y_mean[j]) - log(Y_mean[k])
     }
@@ -199,10 +198,24 @@ mom_estimator_cov <- function(Y, X, O, penalty = FALSE, lambda) {
   #get offset as vector that is indexed in same order as above, so first m offsets are offsets for all timepoints of sample 1 in chronological order,
   #next m are all offsets for timepoints of sample 2 in chronological, and so on and so forth)
   offset_vec <- c(O)
+  #figure out which time and sample points are NOT missing
+  nonmissing_obs <- apply(cov_mat, 1, function (x) {!any(is.na(x))})
+  
+  #update cov and response mat accordingly to drop missing observations
+  cov_mat <- cov_mat[which(nonmissing_obs), ]
+  response_mat <- response_mat[which(nonmissing_obs),]
+  offset_vec <- offset_vec[which(nonmissing_obs)]
   
   for (j in 1:J) {
+    #first, remove NA observations
+    y_vec <- response_mat[,j]
+    obs_idx <- which(!is.na(y_vec))
+    y_obs_vec <- y_vec[obs_idx]
+    
+    cov_obs_mat <- cov_mat[obs_idx,]
+    
     #use only observations with at least one category with a non-zero count in fitting model and include offset (in this case, offset is sum of all counts)
-    gamma_mat[,j] <- glm.fit(x = cov_mat, y = response_mat[,j], family = poisson(), offset = offset_vec)$coefficients
+    gamma_mat[,j] <- glm.fit(x = cov_obs_mat, y = y_obs_vec, family = poisson(), offset = offset_vec[obs_idx])$coefficients
     
   }
   
@@ -213,14 +226,16 @@ mom_estimator_cov <- function(Y, X, O, penalty = FALSE, lambda) {
 
   #get Sigma_Z estimates
   Sigma_Z_est <- matrix(NA, J, J)
-  diag(Sigma_Z_est) <- log(apply((Y^2 - Y)/(rate_est^2), 2, mean))
+  colnames(Sigma_Z_est) <- unlist(dimnames(Y)[2])
+  rownames(Sigma_Z_est) <- unlist(dimnames(Y)[2])
+  diag(Sigma_Z_est) <- log(apply((Y^2 - Y)/(rate_est^2), 2, function (x) {mean(x, na.rm = TRUE)}))
   
   for (j in 1:J) {
     for (k in 1:j) {
       if (k != j) {
         Y_jk_mat <- apply(Y, 3, function (x) {x[,j]*x[,k]})
         rate_jk_mat <- apply(rate_est, 3, function (x) {x[,j]*x[,k]})
-        Sigma_Z_est[j,k] <- Sigma_Z_est[k,j] <- log(mean(Y_jk_mat/rate_jk_mat))
+        Sigma_Z_est[j,k] <- Sigma_Z_est[k,j] <- log(mean(Y_jk_mat/rate_jk_mat, na.rm = TRUE))
       }
     }
   }
@@ -231,13 +246,15 @@ mom_estimator_cov <- function(Y, X, O, penalty = FALSE, lambda) {
   
   #get A estimates
   P <- matrix(NA, nrow = J, ncol = J)
+  colnames(P) <- unlist(dimnames(Y)[2])
+  rownames(P) <- unlist(dimnames(Y)[2])
   for (j in 1:J) {
     for (k in 1:J) {
       #compute terms necessary for estimator
       Y_jk_mat <- apply(Y, 3, function (x) x[2:m,j]*x[1:(m-1),k])
       rate_jk_mat <- apply(rate_est, 3, function (x) x[2:m,j]*x[1:(m-1),k])
       #compute estimate for ij element
-      P[j,k] <- log(mean(Y_jk_mat/rate_jk_mat))
+      P[j,k] <- log(mean(Y_jk_mat/rate_jk_mat, na.rm = TRUE))
     }
   }
   
@@ -265,6 +282,7 @@ mom_estimator_cov <- function(Y, X, O, penalty = FALSE, lambda) {
               "X" = X,
               "O" = O,
               "P" = P,
+              "Gamma" = gamma_mat,
               "Beta" = beta_est,
               "A" = A_est,
               "Sigma_Z" = Sigma_Z_est,
@@ -1857,6 +1875,11 @@ mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_e
                                                   "row" = 1:J,
                                                   "column" = 1:J))
   
+  if(!is.null(dimnames(Y)[2])) {
+    dimnames(full_A_est)$row <- unlist(dimnames(Y)[2])
+    dimnames(full_A_est)$column <- unlist(dimnames(Y)[2])
+  }
+  
   for (j in 1:lambda_N) {
     #get current value of lambda
     l <- lambda_grid[j] 
@@ -1944,7 +1967,7 @@ vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covari
                                     init_Sigma = c(init_params$Sigma),
                                     init_A = c(init_params$A),
                                     optim_method = "optim",
-                                    max.iter = 10000,
+                                    max.iter = 5000,
                                     tol = 1e-5,
                                     verbose = FALSE,
                                     skip_coords = NA,

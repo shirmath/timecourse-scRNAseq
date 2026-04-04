@@ -2,6 +2,7 @@
 library(tidyverse)
 library(data.table)
 library(abind)
+library(patchwork)
 
 #import functions
 source("../scrnaseq_project_functions.R")
@@ -68,7 +69,8 @@ sim_Sigma_res_summary <- sim_Sigma_res_df %>%
   group_by(est_method, row, column) %>%
   summarise(mean_val = mean(value),
             median_val = median(value),
-            sd = sd(value))
+            sd = sd(value),
+            true_value = mean(true_value))
 #add true values into summary table to facilitate comparison between estimates and truth
 sim_Sigma_res_summary$true_value <- diag(Sigma[sim_Sigma_res_summary$row, sim_Sigma_res_summary$column])
 
@@ -128,3 +130,52 @@ sim_beta_res_df %>% mutate(error = value - true_value) %>%
   facet_grid(rows = vars(row), cols = vars(column)) +
   labs(title = "beta MoM Error") +
   theme_bw()
+
+
+## VISUALIZE RESULTS FOR A SUPPORT
+#get A support results
+vi_A_supp_results <- readRDS("vi_sims_A_support_results.RDS")
+
+#get description of sim settings and join to above 
+load("small_settings_df.Rdata")
+small_settings_df$setting <- 1:nrow(small_settings_df)
+
+vi_A_supp_results <- left_join(vi_A_supp_results, small_settings_df, by = join_by(setting == setting))
+
+make_A_supp_plot <- function(results_df, A_value, Sigma_value) {
+  
+  plot <- results_df %>% filter(A_val == A_value, Sigma_val == Sigma_value, est_method != "vi_nopen") %>%
+    ggplot(mapping = aes(x = as.factor(n), y = value, color = metric)) +
+    geom_boxplot() +
+    labs(title = paste0("TPR and FPR for Penalized VI, A: ", A_value, " Sigma: ", Sigma_value),
+         x = "n") +
+    facet_wrap(~est_method) +
+    theme_bw()
+  
+  return(list("A_val" = A_value,
+              "Sigma_val" = Sigma_value,
+              "plot" = plot))
+}
+
+A_val_vec <- unique(vi_A_supp_results$A_val)
+Sigma_val_vec <- unique(vi_A_supp_results$Sigma_val)
+
+A_support_plots_list <- mapply(function (x,y) {make_A_supp_plot(vi_A_supp_results, A_value = x, Sigma_value = y)}, 
+                               rep(A_val_vec, length(Sigma_val_vec)), 
+                               rep(Sigma_val_vec, each = length(A_val_vec)),
+                               SIMPLIFY = FALSE)
+
+small_A_plots <- which(sapply(A_support_plots_list, function (x) {x$A_val == 0.2}))
+med_A_plots <- which(sapply(A_support_plots_list, function (x) {x$A_val == 0.5}))
+large_A_plots <- which(sapply(A_support_plots_list, function (x) {x$A_val == 0.8}))
+
+(A_support_plots_list[[small_A_plots[1]]]$plot + A_support_plots_list[[small_A_plots[2]]]$plot + A_support_plots_list[[small_A_plots[3]]]$plot) /
+(A_support_plots_list[[med_A_plots[1]]]$plot + A_support_plots_list[[med_A_plots[2]]]$plot + A_support_plots_list[[med_A_plots[3]]]$plot) /
+(A_support_plots_list[[large_A_plots[1]]]$plot + A_support_plots_list[[large_A_plots[2]]]$plot + A_support_plots_list[[large_A_plots[3]]]$plot)  
+
+
+#number of sim iterations for each setting
+vi_A_supp_results_iters <- vi_A_supp_results %>%
+  group_by(setting) %>%
+  summarise(num_iters = max(as.numeric(iter)))
+
