@@ -19,6 +19,9 @@ library(numDeriv)
 library(PLNmodels)
 library(patchwork)
 library(tidyverse)
+library(data.table)
+library(igraph)
+library(cowplot)
 ```
 
 ```{r load-functions}
@@ -294,29 +297,51 @@ project_16_sites <- unique(project_16$site_id)
 all_taxa_project16 <- all_taxa_raw %>%
   filter(site_id %in% project_16_sites)
 
-#num species found at each site
+#abundance of species found at each site and time combo
 order_year_aggregate_project16 <- all_taxa_project16 %>%
   group_by(year, Group, site_id) %>%
   summarise(abundance = sum(abundance)) %>%
-  ungroup() %>%
-  tidyr::complete(year, Group, site_id)
+  ungroup() 
 
-project16_missing_summary <- order_year_aggregate_project16 %>%
-  group_by(year, site_id) %>%
-  summarise(missing_groups = sum(is.na(abundance)))
-
-site_years_all_missing <- sum(project16_missing_summary$missing_groups == n_orders)
 
 #get number timepoints, orders, sites in project16
 n_timepoints <- length(unique(order_year_aggregate_project16$year))
 n_orders <- length(unique(order_year_aggregate_project16$Group))
 n_sites <- length(unique(order_year_aggregate_project16$site_id))
 
+#how many days were observation collected per site per year
+siteyear_days_per_year_project16 <- all_taxa_project16 %>%
+  group_by(year, Group, site_id) %>%
+  summarise(n_obs = n())
+
+#get number of species observed across all sites for each species across years
+year_species_totals_project16 <- order_year_aggregate_project16 %>% 
+  group_by(year, Group) %>%
+  summarise(total_across_sites = sum(abundance))
+
+#see how many unique Orders were observed at each site across all timepoints
+site_unique_species_project16 <- order_year_aggregate_project16 %>%
+  group_by(site_id) %>%
+  summarise(n_species = length(unique(Group)))
+
+#get number observed in each species in general across all sites and years
+species_totals_project16 <- order_year_aggregate_project16 %>%
+  group_by(Group) %>%
+  summarise(total_across_all = sum(abundance))
+
+#get sense of missingness in project 16
+project16_missing_summary <- large_projects_sites_per_year %>%
+  filter(project_number == 16, site_descriptor == "n_sites_total")
+
+site_years_all_missing <- sum(project16_missing_summary$missing_groups == n_orders)
+
+
 #create abundance array across all site, year, and family combos
 project16_data_array <- array(NA, dim = c(n_timepoints, n_orders, n_sites), 
                          dimnames = list("year" = sort(unique(order_year_aggregate_project16$year)),
                                          "group" = sort(unique(order_year_aggregate_project16$Group)),
                                          "site" = sort(unique(order_year_aggregate_project16$site_id))))
+
 
 for (i in 1:nrow(order_year_aggregate_project16)) {
   temp_year <- paste0(order_year_aggregate_project16$year[i])
@@ -327,7 +352,170 @@ for (i in 1:nrow(order_year_aggregate_project16)) {
   project16_data_array[temp_year, temp_group, temp_site] <- count
 }
 
+#fit basic mom estimator to project 16 data
 project16_mom <- mom_estimator(project16_data_array)
+
+#get matrices of counts of "problematic" categories
+project16_mom_Sigma_Z_uppertri <- project16_mom$Sigma_Z
+project16_mom_Sigma_Z_uppertri[upper.tri(project16_mom$Sigma_Z)] <- 0
+Sigma_Z_problem_groups <- dimnames(project16_data_array)$group[which(apply(project16_mom_Sigma_Z_uppertri, 1, function (x) {any(is.na(x))}))]
+
+project16_mom_P_uppertri <- project16_mom$P
+project16_mom_P_uppertri[upper.tri(project16_mom$P)] <- 0
+P_problem_groups <- dimnames(project16_data_array)$group[which(apply(project16_mom_P_uppertri, 1, function (x) {any(is.na(x))}))]
+
+problematic_groups <- union(Sigma_Z_problem_groups, P_problem_groups)
+problematic_group_matrices <- lapply(problematic_groups, function (x) {list("group" = x, "counts" = project16_data_array[ ,x,])})
+
+```
+
+
+
+```{r handle-p16-missingness}
+#try excluding "most" problematic groups
+group_names <- unlist(dimnames(project16_data_array)[2])
+problem_groups_intersect <- intersect(Sigma_Z_problem_groups, P_problem_groups)
+project16_data_array_exc <- project16_data_array[ ,which(!(group_names %in% problem_groups_intersect)),]
+
+project16_exc_mom <- mom_estimator(project16_data_array_exc)
+```
+
+```{r project16-data-analysis}
+#get covariate matrix for project 16
+project16_siteyearlevel <- siteyearlevel_raw %>%
+  filter(study_id %in% unique(project_16$study_id))
+
+#first, see if there is only one day of sampling per year for each site (this is true)
+project16_siteyearlevel_summary <- project16_siteyearlevel %>%
+  group_by(year, site_id) %>%
+  summarise(n_obs = n())
+
+#make covariate matrix accordingly
+project16_covariate_array <- array(NA, dim = c(n_timepoints, 4, n_sites),
+                                   dimnames = list("year" = unlist(dimnames(project16_data_array)[1]),
+                                                   "covariate" = c('ppt_mm_12moPrior', 'tmax_C_12moPrior', 'crop_perc_upstr', 'urban_perc_upstr'),
+                                                   "site" = unlist(dimnames(project16_data_array)[3])))
+
+for (i in 1:nrow(project16_siteyearlevel)) {
+  time <- paste0(project16_siteyearlevel$year[i])
+  samp <- paste0(project16_siteyearlevel$site_id[i])
+  
+  cov_values <- unlist(project16_siteyearlevel[i, c('ppt_mm_12moPrior', 'tmax_C_12moPrior', 'crop_perc_upstr', 'urban_perc_upstr')])
+  
+  project16_covariate_array[time, ,samp] <- cov_values
+}
+
+#update the data array to ensure that the counts for missing observations (those w/out covariates) are marked NA 
+#and then for categories where observation is not missing, ensure that 0 is imputed if the group has been observed at that site
+#else leave it marked as NA
+
+#get list of all the unique Groups observed in each site
+observed_species_by_site_project16 <- lapply(dimnames(project16_data_array)$site, function (x) {
+  unique(order_year_aggregate_project16[which(order_year_aggregate_project16$site_id == x), ]$Group)
+  })
+
+names(observed_species_by_site_project16) <- dimnames(project16_data_array)$site
+
+#set up imputed data array
+project16_data_array_imputed <- project16_data_array
+
+for (i in 1:nrow(project16_siteyearlevel)) {
+  temp_year <- project16_siteyearlevel$year_wMissing[i]
+  temp_site <- project16_siteyearlevel$site_id_wMissing[i]
+  
+  #if either year or site are NA, then obs is missing, so mark as missing
+  if (is.na(temp_year) | is.na(temp_site)) {
+    next
+  } else {
+    #if year and site are present, then see if the categories are observed or not based on list of observed species in the site
+    #either remain NA or impute 0 accordingly
+    temp_observed_species <- observed_species_by_site_project16[[paste0(temp_site)]]
+    for (s in temp_observed_species) {
+      project16_data_array_imputed[paste0(temp_year),s, paste0(temp_site)] <- ifelse(is.na(project16_data_array_imputed[paste0(temp_year),s, paste0(temp_site)]), 0,
+                                                                                     project16_data_array_imputed[paste0(temp_year),s, paste0(temp_site)])
+    }
+  }
+}
+
+#non penalized estimate
+project16_mom_cov_est <- mom_estimator_cov(project16_data_array_imputed, project16_covariate_array, matrix(0, nrow = n_timepoints, ncol = n_sites))
+
+#problematic groups for cov fit
+project16_mom_cov_Sigma_Z_uppertri <- project16_mom_cov_est$Sigma_Z
+project16_mom_cov_Sigma_Z_uppertri[upper.tri(project16_mom_cov_est$Sigma_Z)] <- 0
+Sigma_Z_cov_problem_groups1 <- dimnames(project16_data_array)$group[which(apply(project16_mom_cov_Sigma_Z_uppertri, 1, function (x) {any(is.na(x))}))]
+Sigma_Z_cov_problem_groups2 <- dimnames(project16_data_array)$group[which(apply(project16_mom_cov_Sigma_Z_uppertri, 2, function (x) {any(is.na(x))}))]
+
+project16_mom_cov_P_uppertri <- project16_mom_cov_est$P
+project16_mom_cov_P_uppertri[upper.tri(project16_mom_cov_est$P)] <- 0
+P_problem_cov_groups <- dimnames(project16_data_array)$group[which(apply(project16_mom_cov_P_uppertri, 1, function (x) {sum(is.na(x)) > 1}))]
+
+problematic_cov_groups <- union(Sigma_Z_problem_groups, P_problem_cov_groups)
+
+#non penalized with low count groups excluded
+#problematic_cov_groups_idx <- which(dimnames(project16_data_array)$group %in% problematic_cov_groups)
+low_count_groups_idx <- sort(species_totals_project16$total_across_all, index.return = TRUE)$ix[1:10]
+
+project16_mom_exc_est <- mom_estimator(Y = project16_data_array_imputed[ ,-low_count_groups_idx,])
+project16_mom_cov_exc_est <- mom_estimator_cov(Y = project16_data_array_imputed[ ,-low_count_groups_idx,], 
+                                               X = project16_covariate_array, 
+                                               O = matrix(0, nrow = n_timepoints, ncol = n_sites))
+
+#fit penalized estimator for project 16 excluding low count groups
+#set up lambda grid
+lambda_N <- 1000 #number of lambda values
+lambda_min_ratio <- 1/lambda_N # for defining the minimum lambda
+
+lambda_max <- 2 * max(abs(project16_mom_exc_est$P %*% t(project16_mom_exc_est$Sigma_Z))) #this lambda guarantees 0 selected edges
+lambda_grid <- exp(seq(log(lambda_max), log(lambda_max * lambda_min_ratio), length.out = lambda_N))
+
+lambda_cov_max <- 2 * max(abs(project16_mom_cov_exc_est$P %*% t(project16_mom_cov_exc_est$Sigma_Z))) #this lambda guarantees 0 selected edges
+lambda_cov_grid <- exp(seq(log(lambda_cov_max), log(lambda_cov_max * lambda_min_ratio), length.out = lambda_N))
+
+
+project16_pen_mom_exc_est <- mom_pen_estimator_selection(Y = project16_data_array_imputed[, -low_count_groups_idx, ],
+                                                             Sigma_Z_est = project16_mom_exc_est$Sigma_Z,
+                                                             P_est = project16_mom_exc_est$P,
+                                                             lambda_grid = lambda_grid,
+                                                             covariates = FALSE)
+
+project16_pen_mom_cov_exc_est <- mom_pen_estimator_selection(Y = project16_data_array_imputed[, -low_count_groups_idx, ],
+                                                             X = project16_covariate_array,
+                                                             O = matrix(0, nrow = n_timepoints, ncol = n_sites),
+                                                             Sigma_Z_est = project16_mom_cov_exc_est$Sigma_Z,
+                                                             P_est = project16_mom_cov_exc_est$P,
+                                                             lambda_grid = lambda_cov_grid,
+                                                             covariates = TRUE)
+
+project16_pen_bic_results <- project16_pen_mom_exc_est$bic_results
+project16_pen_cov_bic_results <- project16_pen_mom_cov_exc_est$bic_results
+
+p16_bic2_selected_idx <- which.min(project16_pen_mom_exc_est$bic_results$bic2)
+project16_exc_pen_A_est <- project16_pen_mom_exc_est$A_est_results[p16_bic2_selected_idx, ,]
+
+p16_cov_bic2_selected_idx <- which.min(project16_pen_mom_cov_exc_est$bic_results$bic2)
+project16_exc_pen_cov_A_est <- project16_pen_mom_cov_exc_est$A_est_results[p16_cov_bic2_selected_idx, ,]
+
+#visualize selected sparse network
+project16_sparse_adj_mat <- apply(project16_exc_pen_A_est, c(1,2), function (x) {ifelse(x != 0, 1, 0)})
+project16_selected_network <- graph_from_adjacency_matrix(t(project16_sparse_adj_mat), mode = "max")
+
+project16_cov_sparse_adj_mat <- apply(project16_exc_pen_cov_A_est, c(1,2), function (x) {ifelse(x != 0, 1, 0)})
+project16_cov_selected_network <- graph_from_adjacency_matrix(t(project16_cov_sparse_adj_mat), mode = "max")
+
+igraph_options(plot.layout = layout_in_circle)
+
+png("plots/ecology_network_plots.png", width = 12, height = 6, units = "in", res = 140)
+par(mfrow=c(1,2))
+plot(project16_selected_network,
+     edge.arrow.size = 0.3,
+     loop.size = 0.5,
+     main = "Network from model \n without covariates")
+plot(project16_cov_selected_network,
+     edge.arrow.size = 0.3,
+     loop.size = 0.5,
+     main = "Network from model \n with covariates")
+dev.off()
 ```
 
 

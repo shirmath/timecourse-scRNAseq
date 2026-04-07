@@ -498,14 +498,16 @@ obj_function2_for_S <- function(S_vec, params, data, scale = 1) {
   return(obj_function2(data = data, params = params_list, scale = scale))
 }
 
-obj_function2_cov_for_S <- function(S_vec, params, data, scale = 1) {
+#objective function evaluated for S parameters from t=2 to t=m
+obj_function2_cov_for_S <- function(S2m_vec, params, data, scale = 1) {
   
   m <- dim(data$Y)[1]
   J <- dim(data$Y)[2]
   n <- dim(data$Y)[3]
   
   params_list <- params
-  params_list$S <- array(S_vec, dim = c(m, J, n))
+  params_list$S <- array(0, dim = c(m, J, n))
+  params_list$S[2:m, ,] <- S2m_vec
   
   return(obj_function2_cov(data = data, params = params_list, scale = scale))
 }
@@ -1457,7 +1459,7 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
         }
       }
 
-      coord_current_val <- unlist(past_params[coord_name])
+      coord_current_val <- past_params[[coord_name]]
       coord_current_val_vec <- c(coord_current_val)
 
       coord_grad <- switch(coord_name,
@@ -1474,14 +1476,14 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
 
       coord_lower <- switch(coord_name,
                             "Beta" = rep(-Inf, p*J),
-                            "M" = rep(-Inf, length(coord_current_val_vec)),
-                            "S" = rep(1e-10, length(coord_current_val_vec))
+                            "M" = rep(-Inf, m*J*n),
+                            "S" = rep(1e-10, (m-1)*J*n)
       )
 
       coord_upper <- switch(coord_name,
                             "Beta" = rep(Inf, p*J),
-                            "M" = rep(Inf, length(coord_current_val_vec)),
-                            "S" = rep(Inf, length(coord_current_val_vec))
+                            "M" = rep(Inf, m*J*n),
+                            "S" = rep(Inf, (m-1)*J*n)
       )
 
       if (coord_name == "A") {
@@ -1579,7 +1581,32 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
         Beta_update <- rbind(beta0_update, matrix(beta_cov_update, nrow = p, ncol = J))
         new_coord_vec <- c(Beta_update)
 
-      } else {
+      } else if (coord_name == "S") {
+          #optimize only parameters not corresponding to the first timepoint
+          S_2m <- coord_current_val[2:m, , ]
+          opt_res <- nloptr(x0 = c(S_2m),
+                            eval_f = coord_obj,
+                            eval_grad_f = coord_grad,
+                            opts = list(algorithm = "NLOPT_LD_CCSAQ",
+                                        xtol_rel = 1e-4,
+                                        check_derivatives = FALSE,
+                                        maxeval = n*m*J
+                                        #ftol_rel = 1e-4
+                            ),
+                            lb = coord_lower,
+                            ub = coord_upper,
+                            scale = -1,
+                            params = current_params,
+                            data = obs)
+          if (verbose) {
+            print(paste0("S Opt Status: ",opt_res$status))
+            print(paste0("S Opt Message: ",opt_res$message))
+          }
+          new_coord_val <- array(0, dim = c(m, J, n))
+          new_coord_val[2:m, , ] <- opt_res$solution
+          new_coord_vec <- c(new_coord_val)
+          
+      } else if (coord_name == "M") {
         opt_res <- nloptr(x0 = coord_current_val_vec,
                           eval_f = coord_obj,
                           eval_grad_f = coord_grad,
@@ -1595,59 +1622,10 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
                           params = current_params,
                           data = obs)
         if (verbose) {
-          print(paste0("M,S Opt Status: ",opt_res$status))
-          print(paste0("M,S Opt Message: ",opt_res$message))
+          print(paste0("M Opt Status: ",opt_res$status))
+          print(paste0("M Opt Message: ",opt_res$message))
         }
         new_coord_vec <- opt_res$solution
-        # if (optim_method == "nloptr") {
-        #   opt_res <- nloptr(x0 = coord_current_val_vec,
-        #                     eval_f = coord_obj,
-        #                     eval_grad_f = coord_grad,
-        #                     opts = list(algorithm = "NLOPT_LD_CCSAQ",
-        #                                 xtol_rel = 1e-4,
-        #                                 check_derivatives = FALSE,
-        #                                 maxeval = 10000
-        #                                 #"ftol_rel" = 1e-4
-        #                     ),
-        #                     lb = coord_lower,
-        #                     ub = coord_upper,
-        #                     scale = -1,
-        #                     params = current_params,
-        #                     data = obs)
-        #   new_coord_vec <- opt_res$solution
-        # 
-        # } else {
-        #   if (coord_name == "S") {
-        # 
-        #     # new_coord_vec <- constrOptim(theta = coord_current_val_vec,
-        #     #                              f = coord_obj,
-        #     #                              grad = coord_grad,
-        #     #                              ui = diag(1, nrow = length(coord_current_val_vec)),
-        #     #                              ci = matrix(1e-2, nrow = length(coord_current_val_vec), ncol = 1),
-        #     #                              scale = -1,
-        #     #                              params = current_params,
-        #     #                              data = obs)$par
-        #     
-        #     new_coord_vec <- optim(par = coord_current_val_vec,
-        #                            method = "L-BFGS-B",
-        #                            fn = coord_obj,
-        #                            gr = coord_grad,
-        #                            scale = -1,
-        #                            params = current_params,
-        #                            data = obs,
-        #                            lower = coord_lower,
-        #                            upper = coord_upper)$par
-        #   } else {
-        #     new_coord_vec <- optim(par = coord_current_val_vec,
-        #                            method = "BFGS",
-        #                            fn = coord_obj,
-        #                            gr = coord_grad,
-        #                            scale = -1,
-        #                            params = current_params,
-        #                            data = obs)$par
-        #   }
-        # }
-
       }
 
       #assign updated coordinate value to current_params object

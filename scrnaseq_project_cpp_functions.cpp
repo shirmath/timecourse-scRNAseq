@@ -556,7 +556,7 @@ double obj_function2_cov(
   
   // Compute relevant quantities
   double term_1 = accu(Y % (init_M + mu_cube) - exp(M_and_S_half + mu_cube));
-  double term_2 = 0.5*(Y.n_cols * (Y.n_rows - 1) * Y.n_slices - Y.n_slices*(Y.n_rows - 1)*log_det(Sigma).real() + accu(log(init_S)) - accu(log(init_S.row_as_mat(0))));
+  double term_2 = 0.5*(Y.n_cols * (Y.n_rows - 1) * Y.n_slices - Y.n_slices*(Y.n_rows - 1)*log_det(Sigma).real() + accu(log(init_S.subcube(1, 0, 0, init_S.n_rows-1, init_S.n_cols-1, init_S.n_slices-1))));
   
   // print statements for debugging
   /*
@@ -797,7 +797,7 @@ arma::cube S_grad2(
 
 // [[Rcpp::export]] 
 arma::cube S_grad2_cov(
-    const arma::vec & S_vec, // value of M at which to evaluate gradient
+    const arma::vec & S_vec, // value of S (not including the first timepoint) at which to evaluate gradient
     const Rcpp::List & data  , // List(Y, X, O, w)
     const Rcpp::List & params,
     const double scale = 1) {
@@ -809,8 +809,10 @@ arma::cube S_grad2_cov(
   const arma::cube & X = Rcpp::as<arma::cube>(data["X"]); // covariates (m, p, n)
   const arma::mat & O = Rcpp::as<arma::mat>(data["O"]); // offsets (m,n)
   
-  arma::cube init_S(m, J, n);
+  arma::cube init_S(m-1, J, n);
   std::copy(S_vec.begin(), S_vec.end(), init_S.begin()); 
+  arma::cube S1(1, init_S.n_cols, init_S.n_slices, fill::zeros);
+  init_S.insert_rows(0, S1);
   const arma::mat beta = Rcpp::as<arma::mat>(params["Beta"]);     // coefficient matrix (p, J)
   const auto init_M = Rcpp::as<arma::cube>(params["M"]);     // variational approximation means (m,J,n)
   const auto Sigma = Rcpp::as<arma::mat>(params["Sigma"]); // covinv for particular VAR instance (p,p) 
@@ -831,17 +833,12 @@ arma::cube S_grad2_cov(
   arma::mat Omega = inv(Sigma);
   arma::mat At_Omega_A = trans(A) * Omega * A;
   //compute gradient
-  arma::cube grad = arma::cube(m, J, n);
+  arma::cube grad = arma::cube(m-1, J, n);
   
-  for (int t=0; t != m; ++t) {
+  for (int t=1; t != m; ++t) {
     //compute gradient value
     mat temp_grad(n, J);
     temp_grad = - 0.5*exp(M_and_S_half + mu_cube).row_as_mat(t) + 0.5*pow(init_S.row_as_mat(t), -1);
-    
-    if (t == 0) {
-      temp_grad = temp_grad - 0.5*mat(n,1,fill::ones)*trans(At_Omega_A.diag()) - 0.5*pow(init_S.row_as_mat(t), -1);
-    }
-    
     
     if (0 < t & t < m-1) {
       temp_grad = temp_grad - 0.5*mat(n,1,fill::ones)*trans(Omega.diag() + At_Omega_A.diag());
@@ -855,7 +852,7 @@ arma::cube S_grad2_cov(
     //copy to object to be returned
     for(int j=0; j!= J; ++j) {
       for(int i=0; i != n; ++i) {
-        grad(t,j,i) = temp_grad(i,j);
+        grad(t-1,j,i) = temp_grad(i,j);
       }
     }
   }
