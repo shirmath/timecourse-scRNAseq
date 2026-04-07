@@ -28,7 +28,7 @@ sim_setting_idx <- (task_num-1) %/% 50 + 1
 
 ##### SET ITERATION AND SETTING MANUALLY FOR TESTING ON LOCAL MACHINE
 # iteration <- 1
-# sim_setting_idx <- 4
+#sim_setting_idx <- 4
 
 #set number of samples
 n <- sim_settings[[sim_setting_idx]]$n
@@ -99,15 +99,19 @@ for (i in 1:nsim) {
   sim_Sigma_results["mom_nopen", , ,i] <- mom_nopen_est$Sigma
   sim_A_results["mom_nopen", , ,i] <- mom_nopen_est$A
   
+  #set up initial variational parameters
+  init_M_val <- array(0, dim = c(m, J, n))
+  init_S_val <- array(2, dim = c(m, J, n))
+  init_S_val[1, ,] <- 0
 
   #fit non-penalized VI estimator (use neutral initial values for A, Sigma and use MoM estimate for beta as initial value)
   vi_est_nopen <- vi_estimator2_cov(Y = temp_data$Y, X = temp_data$X, O = O,  
                                         init_beta = c(mom_nopen_est$Beta), 
-                                        init_M = rep(0, n*m*J), 
-                                        init_S = rep(2, n*m*J), 
+                                        init_M = c(init_M_val), 
+                                        init_S = c(init_S_val), 
                                         init_Sigma = c(diag(1, J)), 
                                         init_A = rep(0, J^2), 
-                                        optim_method = "nloptr", 
+                                        optim_method = "optim", 
                                         max.iter = 5000, 
                                         tol = 1e-5, 
                                         verbose = TRUE,
