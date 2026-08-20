@@ -571,6 +571,92 @@ double obj_function2_cov(
 }
 
 // [[Rcpp::export]]
+double obj_function2_cov_M_sample(
+  const arma::vec & M_sample_vec, // vector of values of specified sample's variational mean parameters
+  const arma::mat & Y_sample, // observed Y values for sample
+  const arma::mat & X_sample, //observed X values for sample
+  const arma::vec & O, // offsets for all timepoints of specified sample
+  const arma::mat & S_sample, //variational variance parameters for sample
+  const arma::mat & beta, // value of coefficients, beta
+  const arma::mat & A, // value of latent transition matrix, A
+  const arma::mat & Sigma, // value of latent process noise covariance, Sigma
+  const double scale = 1
+) {
+  
+  // set up M matrix
+  arma::mat M_samp = mat(Y_sample.n_rows, Y_sample.n_cols);
+  M_samp = reshape(M_sample_vec, M_samp.n_rows, M_samp.n_cols);
+  
+  /*for (int i = 0; i != M_samp.n_rows; ++i ) {
+    for(int j = 0; j != M_samp.n_cols; ++j) {
+      M_samp.at(i, j) = M_sample_vec.at(j*M_samp.n_rows + i);
+    }
+  }*/
+  
+  // calculate terms for later computations
+  arma::mat mu_and_offset = X_sample * beta.rows(1,beta.n_rows-1) + repelem(beta.row(0), Y_sample.n_rows, 1) + repelem(O, 1, Y_sample.n_cols);
+  arma::mat Omega = inv(Sigma);
+  
+  //compute value of ELBO for sample
+  double term1 = accu(Y_sample % (M_samp + mu_and_offset) - exp(mu_and_offset + M_samp + 0.5*S_sample));
+  double term2 = 0;
+  arma::vec quad_term = vec(M_samp.n_cols);
+  for (int t = 0; t != M_samp.n_rows - 1; ++t) {
+    quad_term = trans(M_samp.row(t+1)) - A * trans(M_samp.row(t));
+    term2 = term2 - 0.5*trace(quad_term * trans(quad_term) * Omega);
+  }
+  
+  // return value of elbo
+  return(scale*(term1 + term2));
+}
+
+// [[Rcpp::export]]
+double obj_function2_cov_S_sample(
+    const arma::vec & S_sample_vec, // vector of values of specified sample's variational variance parameters for timepoints 2 though T_i
+    const arma::mat & Y_sample, // observed Y values for sample
+    const arma::mat & X_sample, //observed X values for sample
+    const arma::vec & O, // offsets for all timepoints of specified sample
+    const arma::mat & M_sample, //variational mean parameters for sample
+    const arma::mat & beta, // value of coefficients, beta
+    const arma::mat & A, // value of latent transition matrix, A
+    const arma::mat & Sigma, // value of latent process noise covariance, Sigma
+    const double scale = 1
+) {
+  
+  // set up S matrix
+  arma::mat S_samp = mat(Y_sample.n_rows, Y_sample.n_cols);
+  S_samp.rows(1, S_samp.n_rows - 1) = reshape(S_sample_vec, S_samp.n_rows - 1, S_samp.n_cols);
+  
+  /*for (int i = 1; i != S_samp.n_rows; ++i ) {
+    for(int j = 0; j != S_samp.n_cols; ++j) {
+      S_samp.at(i, j) = S_sample_vec.at(j*S_samp.n_rows + i);
+      cout << "S [" << i + 1 << ", " << j + 1 << "]: " <<   S_samp.at(i,j) << "\n";
+    }
+  }*/
+  
+  // calculate terms for later computations
+  arma::mat mu_and_offset = X_sample * beta.rows(1,beta.n_rows-1) + repelem(beta.row(0), Y_sample.n_rows, 1) + repelem(O, 1, Y_sample.n_cols);
+  arma::mat Omega = inv(Sigma);
+  arma::mat S1 = diagmat(sum(S_samp, 0) - S_samp.row(0));
+  arma::mat S2 = diagmat(sum(S_samp, 0) - S_samp.row(S_samp.n_rows - 1));
+
+  
+  //compute value of ELBO for sample
+  double term1 = accu(-exp(mu_and_offset + M_sample + 0.5*S_samp));
+  double term2 = 0.5*accu(log(S_sample_vec));
+  double term3 = -0.5*trace((S1 + A * S2 * trans(A)) * Omega);
+  
+  /* statements for debugging
+  cout << "Term 1: " << term1 << "\n";
+  cout << "Term 2: " << term2 << "\n";
+  cout << "Term 3: " << term3 << "\n";
+  */
+  
+  // return value of elbo
+  return(scale*(term1 + term2 + term3));
+}
+
+// [[Rcpp::export]]
 arma::mat beta_grad2(
     const arma::vec & beta_vec, // value of beta (not including row for intercepts!) at which to evaluate gradient (as vector)
     const Rcpp::List & data  , // List(Y, X, O)
@@ -859,3 +945,93 @@ arma::cube S_grad2_cov(
   
   return (scale*grad);
 }
+
+// [[Rcpp::export]] 
+arma::mat M_grad2_cov_sample(
+    const arma::vec & M_sample_vec, // value of M for specified sample 
+    const arma::mat & Y_sample, // observed Y values for sample
+    const arma::mat & X_sample, //observed X values for sample
+    const arma::vec & O, // offsets for all timepoints of specified sample
+    const arma::mat & S_sample, //variational variance parameters for sample
+    const arma::mat & beta, // value of coefficients, beta
+    const arma::mat & A, // value of latent transition matrix, A
+    const arma::mat & Sigma, // value of latent process noise covariance, Sigma
+    const double scale = 1) {
+  
+  
+  // get matrix of i-th sample variational mean parameters based on M_sample_vec input
+  arma::mat M_samp = mat(Y_sample.n_rows, Y_sample.n_cols);
+  M_samp = reshape(M_sample_vec, M_samp.n_rows, M_samp.n_cols);
+
+  // set up useful data structures and base quantities
+  arma::mat Omega = inv(Sigma);
+  arma::mat At_Omega_A = trans(A) * Omega * A;
+  arma::mat At_Omega = trans(A) * Omega;
+  arma::mat mu_mat = mat(Y_sample.n_rows, Y_sample.n_cols);
+  // populate mu mat appropriately by looping over all covariates and computing their specific mean
+  mu_mat = X_sample * beta.rows(1,beta.n_rows-1) + repelem(beta.row(0), Y_sample.n_rows, 1) + repelem(O, 1, Y_sample.n_cols);
+  
+  //set up mat to return gradient
+  arma::mat grad = Y_sample - exp(mu_mat + M_samp + 0.5*S_sample);
+  
+  //compute gradient terms
+  for (int t=0; t != Y_sample.n_rows; t++) {
+      
+      if (t < Y_sample.n_rows - 1) {
+        grad.row(t) = grad.row(t) - M_samp.row(t) * At_Omega_A + M_samp.row(t + 1)* trans(At_Omega);
+      }
+      
+      if (t > 0) {
+        grad.row(t) = grad.row(t) - M_samp.row(t) * Omega + M_samp.row(t - 1) * At_Omega;
+      }
+  }
+  
+  return (scale*grad);
+}
+
+// [[Rcpp::export]] 
+arma::mat S_grad2_cov_sample(
+    const arma::vec & S_sample_vec, // value of S for specified sample, excluding first timepoint
+    const arma::mat & Y_sample, // observed Y values for sample
+    const arma::mat & X_sample, //observed X values for sample
+    const arma::vec & O, // offsets for all timepoints of specified sample
+    const arma::mat & M_sample, //variational variance parameters for sample
+    const arma::mat & beta, // value of coefficients, beta
+    const arma::mat & A, // value of latent transition matrix, A
+    const arma::mat & Sigma, // value of latent process noise covariance, Sigma
+    const double scale = 1) {
+  
+  // get matrix of i-th sample variational variance parameters based on S_sample_vec input
+  arma::mat S_samp = mat(Y_sample.n_rows - 1, Y_sample.n_cols);
+  S_samp = reshape(S_sample_vec, S_samp.n_rows, S_samp.n_cols);
+  /*for (int i = 0; i != S_samp.n_rows; ++i ) {
+    for(int j = 0; j != S_samp.n_cols; ++j) {
+      S_samp.at(i, j) = S_sample_vec.at(j*S_samp.n_rows + i);
+    }
+  }*/
+  
+  // set up useful data structures and base quantities
+  arma::mat M_samp = M_sample.rows(1, M_sample.n_rows - 1);
+  arma::mat Omega = inv(Sigma);
+  arma::mat At_Omega_A = trans(A) * Omega * A;
+  arma::mat mu_mat = mat(Y_sample.n_rows - 1, Y_sample.n_cols);
+  // populate mu mat appropriately by looping over all covariates and computing their specific mean
+  mu_mat = X_sample.rows(1, X_sample.n_rows - 1) * beta.rows(1,beta.n_rows-1) + repelem(beta.row(0), Y_sample.n_rows - 1, 1) + repelem(O(span(1, O.n_rows-1)), 1, Y_sample.n_cols);
+  
+  //set up mat to return gradient
+  arma::mat grad =  -0.5*exp(mu_mat + M_samp + 0.5*S_samp);
+  
+  //compute gradient terms
+  for (int t=0; t != S_samp.n_rows; t++) {
+    grad.row(t) = grad.row(t) + 0.5*pow(S_samp.row(t), -1) - 0.5*trans(Omega.diag());
+    
+    if (t < S_samp.n_rows-1) {
+      grad.row(t) = grad.row(t) - 0.5*trans(At_Omega_A.diag());
+    }
+  }
+  
+  return (scale*grad);
+}
+
+
+

@@ -486,6 +486,19 @@ obj_function2_cov_for_M <- function(M_vec, params, data, scale = 1) {
   return(obj_function2_cov(data = data, params = params_list, scale = scale))
 }
 
+#objective function evaluated for sample block of M parameters
+obj_function2_cov_for_M_samp <- function(M_samp_vec, sample_idx, params, data, scale = 1) {
+  
+  m <- dim(data$Y)[1]
+  J <- dim(data$Y)[2]
+  n <- dim(data$Y)[3]
+  
+  params_list <- params
+  params_list$M[, ,sample_idx] <- matrix(M_samp_vec, nrow = m, ncol = J)
+  
+  return(obj_function2_cov(data = data, params = params_list, scale = scale))
+}
+
 obj_function2_for_S <- function(S_vec, params, data, scale = 1) {
 
   m <- dim(data$Y)[1]
@@ -508,6 +521,19 @@ obj_function2_cov_for_S <- function(S2m_vec, params, data, scale = 1) {
   params_list <- params
   params_list$S <- array(0, dim = c(m, J, n))
   params_list$S[2:m, ,] <- S2m_vec
+  
+  return(obj_function2_cov(data = data, params = params_list, scale = scale))
+}
+
+#objective function evaluated for sample block of S parameters from t=2 to t=m
+obj_function2_cov_for_S_samp <- function(S2m_samp_vec, sample_idx, params, data, scale = 1) {
+  
+  m <- dim(data$Y)[1]
+  J <- dim(data$Y)[2]
+  n <- dim(data$Y)[3]
+  
+  params_list <- params
+  params_list$S[2:m, ,sample_idx] <- matrix(S2m_samp_vec, nrow = m-1, ncol = J)
   
   return(obj_function2_cov(data = data, params = params_list, scale = scale))
 }
@@ -1464,26 +1490,26 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
 
       coord_grad <- switch(coord_name,
                            "Beta" = beta_grad2,
-                           "M" = M_grad2_cov,
-                           "S" = S_grad2_cov
+                           "M" = M_grad2_cov_sample,
+                           "S" = S_grad2_cov_sample
       )
 
       coord_obj <- switch(coord_name,
                           "Beta" = obj_function2_for_beta,
-                          "M" = obj_function2_cov_for_M,
-                          "S" = obj_function2_cov_for_S
+                          "M" = obj_function2_cov_M_sample,
+                          "S" = obj_function2_cov_S_sample
       )
 
       coord_lower <- switch(coord_name,
                             "Beta" = rep(-Inf, p*J),
-                            "M" = rep(-Inf, m*J*n),
-                            "S" = rep(1e-10, (m-1)*J*n)
+                            "M" = rep(-Inf, m*J),
+                            "S" = rep(1e-10, (m-1)*J)
       )
 
       coord_upper <- switch(coord_name,
                             "Beta" = rep(Inf, p*J),
-                            "M" = rep(Inf, m*J*n),
-                            "S" = rep(Inf, (m-1)*J*n)
+                            "M" = rep(Inf, m*J),
+                            "S" = rep(Inf, (m-1)*J)
       )
 
       if (coord_name == "A") {
@@ -1582,50 +1608,145 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
         new_coord_vec <- c(Beta_update)
 
       } else if (coord_name == "S") {
-          #optimize only parameters not corresponding to the first timepoint
-          S_2m <- coord_current_val[2:m, , ]
-          opt_res <- nloptr(x0 = c(S_2m),
-                            eval_f = coord_obj,
-                            eval_grad_f = coord_grad,
-                            opts = list(algorithm = "NLOPT_LD_CCSAQ",
-                                        xtol_rel = 1e-4,
-                                        check_derivatives = FALSE,
-                                        maxeval = n*m*J
-                                        #ftol_rel = 1e-4
-                            ),
-                            lb = coord_lower,
-                            ub = coord_upper,
-                            scale = -1,
-                            params = current_params,
-                            data = obs)
+        #set up array to store update value of coordinate
+        S_update <- array(0, dim = c(m, J, n))
+        #optimize only parameters not corresponding to the first timepoint by each sample block
+        for (i in 1:n) {
+          #if verbose, print out sample index
+          if (verbose) {print(paste0("sample: ", i))}
+          #get current sample index
+          temp_idx <- i
+          
+          #optimize current sample's parameters
+          S_2m_sample <- coord_current_val[2:m, ,temp_idx]
+          temp_opt_res <- nloptr(x0 = c(S_2m_sample),
+                                 eval_f = coord_obj,
+                                 eval_grad_f = coord_grad,
+                                 opts = list(algorithm = "NLOPT_LD_CCSAQ",
+                                             xtol_rel = 1e-4,
+                                             check_derivatives = FALSE,
+                                             maxeval = m*J
+                                             #ftol_rel = 1e-4
+                                 ),
+                                 lb = coord_lower,
+                                 ub = coord_upper,
+                                 scale = -1,
+                                 Y_sample = obs$Y[ , ,temp_idx],
+                                 X_sample = obs$X[ , ,temp_idx],
+                                 O = obs$O[ ,temp_idx],
+                                 M_sample = current_params$M[ , ,temp_idx],
+                                 A = current_params$A,
+                                 Sigma = current_params$Sigma,
+                                 beta = current_params$Beta
+                                 #params = current_params,
+                                 #data = obs,
+                                 #sample_idx = temp_idx
+                                 )
+          
           if (verbose) {
-            print(paste0("S Opt Status: ",opt_res$status))
-            print(paste0("S Opt Message: ",opt_res$message))
+            print(paste0("Opt Status: ",temp_opt_res$status))
+            print(paste0("Opt Iters: ",temp_opt_res$iterations))
           }
-          new_coord_val <- array(0, dim = c(m, J, n))
-          new_coord_val[2:m, , ] <- opt_res$solution
-          new_coord_vec <- c(new_coord_val)
+          
+          S_update[2:m, ,temp_idx] <- temp_opt_res$solution
+            
+        }
+        
+        #store updated parameters to new coord vec
+        new_coord_vec <- c(S_update)
+        #code for optimizing over all S parameters all at once
+          # S_2m <- coord_current_val[2:m, , ]
+          # opt_res <- nloptr(x0 = c(S_2m),
+          #                   eval_f = coord_obj,
+          #                   eval_grad_f = coord_grad,
+          #                   opts = list(algorithm = "NLOPT_LD_LBFGS",
+          #                               xtol_rel = 1e-4,
+          #                               check_derivatives = FALSE,
+          #                               maxeval = n*m*J
+          #                               #ftol_rel = 1e-4
+          #                   ),
+          #                   lb = coord_lower,
+          #                   ub = coord_upper,
+          #                   scale = -1,
+          #                   params = current_params,
+          #                   data = obs)
+          # if (verbose) {
+          #   print(paste0("S Opt Status: ",opt_res$status))
+          #   print(paste0("S Opt Message: ",opt_res$message))
+          # }
+          # new_coord_val <- array(0, dim = c(m, J, n))
+          # new_coord_val[2:m, , ] <- opt_res$solution
+          # new_coord_vec <- c(new_coord_val)
           
       } else if (coord_name == "M") {
-        opt_res <- nloptr(x0 = coord_current_val_vec,
-                          eval_f = coord_obj,
-                          eval_grad_f = coord_grad,
-                          opts = list(algorithm = "NLOPT_LD_CCSAQ",
-                                      xtol_rel = 1e-4,
-                                      check_derivatives = FALSE,
-                                      maxeval = n*m*J
-                                      #ftol_rel = 1e-4
-                          ),
-                          lb = coord_lower,
-                          ub = coord_upper,
-                          scale = -1,
-                          params = current_params,
-                          data = obs)
-        if (verbose) {
-          print(paste0("M Opt Status: ",opt_res$status))
-          print(paste0("M Opt Message: ",opt_res$message))
+        #set up array to store update value of coordinate
+        M_update <- array(0, dim = c(m, J, n))
+        
+        #optimize only parameters not corresponding to the first timepoint by each sample block
+        for (i in 1:n) {
+          #if verbose, print out sample index
+          if (verbose) {print(paste0("sample: ", i))}
+          
+          #get current sample index
+          temp_idx <- i
+          
+          #optimize current sample's parameters
+          M_sample <- coord_current_val[, ,temp_idx]
+          temp_opt_res <- nloptr(x0 = c(M_sample),
+                                 eval_f = coord_obj,
+                                 eval_grad_f = coord_grad,
+                                 opts = list(algorithm = "NLOPT_LD_LBFGS",
+                                             xtol_rel = 1e-4,
+                                             check_derivatives = FALSE,
+                                             maxeval = m*J
+                                             #ftol_rel = 1e-4
+                                 ),
+                                 lb = coord_lower,
+                                 ub = coord_upper,
+                                 scale = -1,
+                                 #params = current_params,
+                                 #data = obs,
+                                 #sample_idx = temp_idx,
+                                 Y_sample = obs$Y[ , ,temp_idx],
+                                 X_sample = obs$X[ , ,temp_idx],
+                                 O = obs$O[ ,temp_idx],
+                                 S_sample = current_params$S[ , ,temp_idx],
+                                 A = current_params$A,
+                                 Sigma = current_params$Sigma,
+                                 beta = current_params$Beta)
+          
+          if (verbose) {
+            print(paste0("Opt Status: ",temp_opt_res$status))
+            print(paste0("Opt Iterations: ",temp_opt_res$iterations))
+          }
+          
+          M_update[, ,temp_idx] <- temp_opt_res$solution
+          
         }
-        new_coord_vec <- opt_res$solution
+        
+        #store updated parameters to new coord vec
+        new_coord_vec <- c(M_update)
+        
+        #code for optimizing over all M parameters all at once
+        # opt_res <- nloptr(x0 = coord_current_val_vec,
+        #                   eval_f = coord_obj,
+        #                   eval_grad_f = coord_grad,
+        #                   opts = list(algorithm = "NLOPT_LD_LBFGS",
+        #                               xtol_rel = 1e-4,
+        #                               check_derivatives = FALSE,
+        #                               maxeval = n*m*J
+        #                               #ftol_rel = 1e-4
+        #                   ),
+        #                   lb = coord_lower,
+        #                   ub = coord_upper,
+        #                   scale = -1,
+        #                   params = current_params,
+        #                   data = obs)
+        # if (verbose) {
+        #   print(paste0("M Opt Status: ",opt_res$status))
+        #   print(paste0("M Opt Message: ",opt_res$message))
+        # }
+        # new_coord_vec <- opt_res$solution
       }
 
       #assign updated coordinate value to current_params object
@@ -1665,31 +1786,31 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
   return(result)
 }
 
-
 #OPTIMIZATION FUNCTION FOR ESTIMATING A WITH PENALIZED MOM
-mom_optim_A <- function(A_init = NULL, Sigma_Z, P, lambda, tol = 1e-7, max.iter = 2000) {
+mom_optim_A <- function(A_init = NULL, Sigma_Z, P, W, lambda, tol = 1e-7, max.iter = 2000) {
   #get number of categories
   J <- nrow(P)
   if(is.null(A_init))
   {
     A_init <- matrix(0, J, J)
   }
+  
   Lconst <- 2 * norm(Sigma_Z %*% t(Sigma_Z), type = "2")
   step <- 1 / Lconst
   
   A_prev <- A_init
   Yk <- A_init
   tk <- 1
-  obj_prev <- sum((A_prev %*% Sigma_Z - P)^2) + lambda * sum(abs(A_prev))
+  obj_prev <- sum((A_prev %*% Sigma_Z - P)^2) + lambda * sum(W * abs(A_prev))
   
   for (it in 1:max.iter) {
     Y_grad <- 2 * (Yk %*% Sigma_Z - P) %*% t(Sigma_Z)
-    A_new <- sign(Yk - step * Y_grad)*pmax(abs(Yk - step * Y_grad) - step * lambda, 0)
+    A_new <- sign(Yk - step * Y_grad)*pmax(abs(Yk - step * Y_grad) - step * lambda * W, 0)
     
     tk_new = (1 + sqrt(1 + 4 * tk^2)) / 2
     Yk = A_new + ((tk - 1) / tk_new) * (A_new - A_prev)
     
-    obj_new = sum((A_new %*% Sigma_Z - P)^2) + lambda * sum(abs(A_new))
+    obj_new = sum((A_new %*% Sigma_Z - P)^2) + lambda * sum(W * abs(A_new))
     if (abs(obj_new - obj_prev) / (abs(obj_prev)) < tol) {
       A_prev = A_new
       break
@@ -1702,6 +1823,44 @@ mom_optim_A <- function(A_init = NULL, Sigma_Z, P, lambda, tol = 1e-7, max.iter 
   
   A_prev
 }
+
+
+#OPTIMIZATION FUNCTION FOR ESTIMATING A WITH PENALIZED MOM
+# mom_optim_A <- function(A_init = NULL, Sigma_Z, P, lambda, tol = 1e-7, max.iter = 2000) {
+#   #get number of categories
+#   J <- nrow(P)
+#   if(is.null(A_init))
+#   {
+#     A_init <- matrix(0, J, J)
+#   }
+#   Lconst <- 2 * norm(Sigma_Z %*% t(Sigma_Z), type = "2")
+#   step <- 1 / Lconst
+#   
+#   A_prev <- A_init
+#   Yk <- A_init
+#   tk <- 1
+#   obj_prev <- sum((A_prev %*% Sigma_Z - P)^2) + lambda * sum(abs(A_prev))
+#   
+#   for (it in 1:max.iter) {
+#     Y_grad <- 2 * (Yk %*% Sigma_Z - P) %*% t(Sigma_Z)
+#     A_new <- sign(Yk - step * Y_grad)*pmax(abs(Yk - step * Y_grad) - step * lambda, 0)
+#     
+#     tk_new = (1 + sqrt(1 + 4 * tk^2)) / 2
+#     Yk = A_new + ((tk - 1) / tk_new) * (A_new - A_prev)
+#     
+#     obj_new = sum((A_new %*% Sigma_Z - P)^2) + lambda * sum(abs(A_new))
+#     if (abs(obj_new - obj_prev) / (abs(obj_prev)) < tol) {
+#       A_prev = A_new
+#       break
+#     }
+#     
+#     A_prev = A_new
+#     tk = tk_new
+#     obj_prev = obj_new
+#   }
+#   
+#   A_prev
+# }
 
 
 #OPTIMIZATION FUNCTION FOR ESTIMATING A WITH PENALIZED VI2
@@ -1831,7 +1990,7 @@ vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.ite
 # P_est should be estimate of the P matrix from non-penalized MoM estimator
 # lambda_grid should be grid of lambdas for which you want to fit penalized MoM estimator
 # covariates is boolean that indicates whether to use MoM estimator for model with covariates or the one for model without covariates
-mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_est, lambda_grid, covariates = FALSE) {
+mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_est, W_est, lambda_grid, covariates = FALSE) {
   
   #get quantities needed for later computations and storing results
   m <- dim(Y)[1]
@@ -1863,7 +2022,7 @@ mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_e
     l <- lambda_grid[j] 
     
     #fit penalized estimate
-    mom_pen_est <- mom_optim_A(A_init = NULL, Sigma_Z = Sigma_Z_est, P = P_est, lambda = l, tol = 1e-7, max.iter = 2000)
+    mom_pen_est <- mom_optim_A(A_init = NULL, Sigma_Z = Sigma_Z_est, P = P_est, W = W_est, lambda = l, tol = 1e-7, max.iter = 2000)
     
     
     #record selected support of A for current lambda 
