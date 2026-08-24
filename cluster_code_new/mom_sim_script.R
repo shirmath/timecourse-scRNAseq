@@ -4,11 +4,12 @@ library(Matrix)
 library(Rcpp)
 library(RcppArmadillo)
 library(data.table)
+library(here)
 
 
 #import functions
-source("../scrnaseq_project_functions.R")
-source("cluster_code_new/")
+source(here("scrnaseq_project_functions.R"))
+source(here("cluster_code_new/sim_helper_functions.R"))
 #Rcpp::sourceCpp("../scrnaseq_project_cpp_functions.cpp")
 
 #GET ARGUMENT FROM BATCH FILE TO GET ITERATION AND SETTING
@@ -19,16 +20,20 @@ task_num <- as.numeric(commandArgs(trailingOnly=TRUE)[1])
 # The iteration number is passed as a command line argument in the sbatch script:a
 iteration <- (task_num - 1) %% 25 + 1
 
+#set iteration manually for testing on local machine
+iteration <- 2
+
 #SET UP SETTINGS FOR SIMULATION
 
 #CHANGE THIS FOR DIFFERENT SIM SETTINGS (RECALL THERE ARE 36 TOTAL SETTINGS)
 #sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0-9]+"))
 sim_setting_idx <- (task_num-1) %/% 25 + 1
 
+# set setting idx manually for testing code on local machine
 sim_setting_idx <- 5
 
 # load sim settings dataframe to set simulation settings appropriately
-sim_settings_df <- readRDS("cluster_code_new/sim_settings_df.rds")
+sim_settings_df <- readRDS(here("cluster_code_new/sim_settings_df.rds"))
 #set number of samples
 n <- sim_settings_df$n[sim_setting_idx]
 #set number of timepoints per sample
@@ -58,14 +63,16 @@ set.seed(0)
 beta <- rbind(rnorm(J, mean = 0.2, sd = 0.1),
               matrix(rnorm((p-1)*J, mean = 0, sd = 0.2), nrow = p-1, ncol = J))
 
-# set up A and Sigma according to specified simulation settings, set seed according to task number for simulation for reproducibility 
+# set up A and Sigma according to specified simulation settings, set seed according to iteration for simulation for reproducibility 
 # and different values generated across simulation runs
-A <- make_A()
-
-
-
-
-Sigma <- sim_settings[[sim_setting_idx]]$Sigma
+set.seed(iteration)
+A <- make_A(J = J, 
+            sparsity_level = sparsity_level,
+            lower = A_lower,
+            upper = A_upper)
+Sigma <- make_Sigma(J = J,
+                    lower = Sigma_lower,
+                    upper = Sigma_upper)
 
 
 #record true support of A (used for selection of best model with oracle knowledge in simulations)
