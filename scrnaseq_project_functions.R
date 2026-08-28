@@ -1786,13 +1786,13 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
   return(result)
 }
 
-#OPTIMIZATION FUNCTION FOR ESTIMATING A WITH PENALIZED MOM
-mom_optim_A <- function(A_init = NULL, Sigma_Z, P, W, lambda, tol = 1e-7, max.iter = 2000) {
+#OPTIMIZATION FUNCTION FOR ESTIMATING ROW OF A WITH PENALIZED MOM
+mom_optim_A <- function(A_init = NULL, Sigma_Z, p, w, lambda, tol = 1e-7, max.iter = 2000) {
   #get number of categories
-  J <- nrow(P)
+  J <- length(p)
   if(is.null(A_init))
   {
-    A_init <- matrix(0, J, J)
+    A_init <- matrix(0, J, 1)
   }
   
   Lconst <- 2 * norm(Sigma_Z %*% t(Sigma_Z), type = "2")
@@ -1801,16 +1801,16 @@ mom_optim_A <- function(A_init = NULL, Sigma_Z, P, W, lambda, tol = 1e-7, max.it
   A_prev <- A_init
   Yk <- A_init
   tk <- 1
-  obj_prev <- sum((A_prev %*% Sigma_Z - P)^2) + lambda * sum(W * abs(A_prev))
+  obj_prev <- sum((Sigma_Z %*% A_prev - p)^2) + lambda * sum(w * abs(A_prev))
   
   for (it in 1:max.iter) {
-    Y_grad <- 2 * (Yk %*% Sigma_Z - P) %*% t(Sigma_Z)
-    A_new <- sign(Yk - step * Y_grad)*pmax(abs(Yk - step * Y_grad) - step * lambda * W, 0)
+    Y_grad <- 2 * t(Sigma_Z) %*% (Sigma_Z %*% Yk - p)
+    A_new <- sign(Yk - step * Y_grad)*pmax(abs(Yk - step * Y_grad) - step * lambda * w, 0)
     
     tk_new = (1 + sqrt(1 + 4 * tk^2)) / 2
     Yk = A_new + ((tk - 1) / tk_new) * (A_new - A_prev)
     
-    obj_new = sum((A_new %*% Sigma_Z - P)^2) + lambda * sum(W * abs(A_new))
+    obj_new = sum((Sigma_Z %*% A_new - p)^2) + lambda * sum(w * abs(A_new))
     if (abs(obj_new - obj_prev) / (abs(obj_prev)) < tol) {
       A_prev = A_new
       break
@@ -1988,70 +1988,74 @@ vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.ite
 # A_init should be initial value of A to be passed to A optimization function
 # Sigma_Z_est should be estimate of Sigma_Z from non-penalized MoM estimator
 # P_est should be estimate of the P matrix from non-penalized MoM estimator
-# lambda_grid should be grid of lambdas for which you want to fit penalized MoM estimator
+# lambda_grid should be n_lambdas x J matrix of lambdas where each column is lambda grid for j-th row of A for which you want to fit penalized MoM estimator
 # covariates is boolean that indicates whether to use MoM estimator for model with covariates or the one for model without covariates
-mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_est, W_est, lambda_grid, covariates = FALSE) {
+mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_est, W_est, lambda_grid_mat, covariates = FALSE) {
   
   #get quantities needed for later computations and storing results
   m <- dim(Y)[1]
   n <- dim(Y)[3]
   J <- nrow(Sigma_Z_est)
-  lambda_N <- length(lambda_grid)
+  lambda_N <- dim(lambda_grid_mat)[1]
   n_lags <- (m-1)*n
   
-  #set up data frame for storing relevant high level results
-  #bic is computed using n*(m-1) as sample size in BIC computation
-  #bic2 is computed using n as sample size in BIC computation
-  selection_results <- data.table("lambda" = lambda_grid,
-                             "edges" = rep(NA, lambda_N),
-                             "bic" = rep(NA, lambda_N),
-                             "bic2" = rep(NA, lambda_N))
-  #set up array to store estimated A for each lambda
-  full_A_est <- array(0, dim = c(lambda_N, J, J),
-                                  dimnames = list("lambda" = lambda_grid,
-                                                  "row" = 1:J,
-                                                  "column" = 1:J))
-  
+  #set up list for storing relevant high level results for each sub-problem
+  #bic is computed using n as sample size in BIC computation
+  selection_results <- apply(lambda_grid_mat, 2, function (x) {data.table("lamba" = x,
+                                                                          "edges" = rep(NA, lambda_N),
+                                                                          "bic" = rep(NA, lambda_N))})
+
+  #set up list of arrays to store estimated row of A for each lambda in lambda grid of that row's sub-problem
+  full_A_est <- apply(lambda_grid_mat, 2, function (x) {
+    matrix(0, nrow = lambda_N, ncol = J,
+          dimnames = list("lambda" = x,
+                          "column" = 1:J))},
+    simplify = FALSE
+  )
+
+  # assign component names to the elements of full_A_est list and the column attribute of each array if provided in data  
   if(!is.null(dimnames(Y)[2])) {
-    dimnames(full_A_est)$row <- unlist(dimnames(Y)[2])
-    dimnames(full_A_est)$column <- unlist(dimnames(Y)[2])
+    names(full_A_est) <- unlist(dimnames(Y)[2])
+    for (i in 1:J) {dimnames(full_A_est[[i]])$column <- unlist(dimnames(Y)[2])}
   }
   
-  for (j in 1:lambda_N) {
-    #get current value of lambda
-    l <- lambda_grid[j] 
-    
-    #fit penalized estimate
-    mom_pen_est <- mom_optim_A(A_init = NULL, Sigma_Z = Sigma_Z_est, P = P_est, W = W_est, lambda = l, tol = 1e-7, max.iter = 2000)
-    
-    
-    #record selected support of A for current lambda 
-    A_est_supp <- which(mom_pen_est != 0)
-    selection_results$edges[j] <- length(A_est_supp)
-    full_A_est[paste0(l), , ] <- mom_pen_est
-    
-    #refit based on selected edges of A
-    if (length(A_est_supp) > 0) {
-      K <- kronecker(t(Sigma_Z_est), diag(1, J))  # (J^2) x (J^2)
-      b <- as.vector(P_est)                          
+  # fit over grid of lambdas for each row
+  for (k in 1:J) {
+    for (j in 1:lambda_N) {
       
-      Ks = as.matrix(K[, A_est_supp])
-      fit = lm.fit(x = Ks, y = b)
-      a_hat = fit$coefficients
+      #get current value of lambda
+      l <- lambda_grid_mat[j,k] 
+      print(paste0("Fitting for lambda ", l, " and row ", k))
+      #fit penalized estimate
+      mom_pen_est <- mom_optim_A(A_init = NULL, Sigma_Z = Sigma_Z_est, p = P_est[k,], w = W_est[k,], lambda = l, tol = 1e-7, max.iter = 2000)
       
-      Avec = numeric(J^2)
-      Avec[A_est_supp] = a_hat
-      A_refit = matrix(Avec, nrow = J, ncol = J)  
-      full_A_est[paste0(l), , ] <- A_est <- A_refit
-    } else {
-      full_A_est[paste0(l), , ] <- A_est <- matrix(0, J, J)
+      
+      #record selected support of A for current lambda 
+      a_est_supp <- which(mom_pen_est != 0)
+      selection_results[[k]]$edges[j] <- length(a_est_supp)
+      
+      
+      #refit based on selected edges of A
+      if (length(a_est_supp) > 0) {
+        X <- t(Sigma_Z_est)  # (J^2) x (J^2)
+        b <- P_est[k,]                          
+        
+        Xs <- as.matrix(X[, a_est_supp])
+        fit <- lm.fit(x = Xs, y = b)
+        a_refit <- fit$coefficients
+        
+        a_vec <- rep(0, J)
+        a_vec[a_est_supp] <- a_refit
+        full_A_est[[k]][j, ] <- a_est <- a_vec
+      } else {
+        full_A_est[[k]][j, ] <- a_est <- rep(0, J)
+      }
+      
+      #compute BIC for current lambda
+      selection_results[[k]]$bic[j] <- n*sum((Sigma_Z_est %*% a_est - P_est[k,])^2) + log(n)*length(a_est_supp) 
     }
-    
-    #compute criteria for each lambda
-    selection_results$bic[j] <- n_lags*sum((A_est %*% Sigma_Z_est - P_est)^2) + log(n_lags)*length(A_est_supp) 
-    selection_results$bic2[j] <- n*sum((A_est %*% Sigma_Z_est - P_est)^2) + log(n)*length(A_est_supp) 
-    
   }
+  
   
   return(list("bic_results" = selection_results,
               "A_est_results" = full_A_est))
@@ -2074,9 +2078,8 @@ vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covari
   n_lags <- (m-1)*n
   list_data <- list("Y" = Y, "X" = X, "O" = O)
   
-  #set up data frame for storing relevant high level results
+  #set up list for storing relevant high level results
   #bic is computed using n*(m-1) as sample size in BIC computation
-  #bic2 is computed using n as sample size in BIC computation
   selection_results <- data.table("lambda" = lambda_grid,
                                   "edges" = rep(NA, lambda_N),
                                   "bic" = rep(NA, lambda_N),
@@ -2139,7 +2142,6 @@ vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covari
     
     #compute criteria for each lambda
     selection_results$bic[j] <- -2*obj_function2_cov(data = list_data, params = vi_pen_refit) + log(n_lags)*length(A_est_supp)
-    selection_results$bic2[j] <- -2*obj_function2_cov(data = list_data, params = vi_pen_refit) + log(n)*length(A_est_supp) 
     
   }
   
