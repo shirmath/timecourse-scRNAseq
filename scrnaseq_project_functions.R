@@ -2001,7 +2001,7 @@ mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_e
   
   #set up list for storing relevant high level results for each sub-problem
   #bic is computed using n as sample size in BIC computation
-  selection_results <- apply(lambda_grid_mat, 2, function (x) {data.table("lamba" = x,
+  selection_results <- apply(lambda_grid_mat, 2, function (x) {data.table("lambda" = x,
                                                                           "edges" = rep(NA, lambda_N),
                                                                           "bic" = rep(NA, lambda_N))})
 
