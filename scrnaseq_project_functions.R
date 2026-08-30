@@ -2025,7 +2025,7 @@ mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_e
       
       #get current value of lambda
       l <- lambda_grid_mat[j,k] 
-      print(paste0("Fitting for lambda ", l, " and row ", k))
+      #print(paste0("Fitting for lambda ", l, " and row ", k))
       #fit penalized estimate
       mom_pen_est <- mom_optim_A(A_init = NULL, Sigma_Z = Sigma_Z_est, p = P_est[k,], w = W_est[k,], lambda = l, tol = 1e-7, max.iter = 2000)
       
