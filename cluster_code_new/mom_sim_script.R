@@ -154,29 +154,29 @@ for (i in 1:nsim) {
 
 #SAVE RESULTS
 # Create directory to store results for this particular sim setting
-dir.create(paste0("cluster_code_new/Setting_", sim_setting_idx), showWarnings = FALSE)
+dir.create(paste0("Setting_", sim_setting_idx), showWarnings = FALSE)
 
 #Store the simulated data across sims
-sim_data_file <- paste0("cluster_code_new/Setting_",sim_setting_idx,"/sim_data_", iteration, ".RDS")
+sim_data_file <- paste0("Setting_",sim_setting_idx,"/sim_data_", iteration, ".RDS")
 saveRDS(sim_data_list, file = sim_data_file)
 
 #Store beta results
-beta_file <- paste0("cluster_code_new/Setting_",sim_setting_idx,"/sim_beta_", iteration, ".RDS")
+beta_file <- paste0("Setting_",sim_setting_idx,"/sim_beta_", iteration, ".RDS")
 saveRDS(sim_beta_results, file = beta_file)
 
 #Store Sigma results
-Sigma_file <- paste0("cluster_code_new/Setting_", sim_setting_idx,"/sim_Sigma_", iteration, ".RDS")
+Sigma_file <- paste0("Setting_", sim_setting_idx,"/sim_Sigma_", iteration, ".RDS")
 saveRDS(sim_Sigma_results, file = Sigma_file)
 
 #Store A results
-A_file <-paste0("cluster_code_new/Setting_",sim_setting_idx,"/sim_A_", iteration, ".RDS")
+A_file <-paste0("Setting_",sim_setting_idx,"/sim_A_", iteration, ".RDS")
 saveRDS(sim_A_results, file = A_file)
 
 #Store lambda results
-lambda_file <- paste0("cluster_code_new/Setting_",sim_setting_idx,"/sim_lambda_", iteration, ".RDS")
+lambda_file <- paste0("Setting_",sim_setting_idx,"/sim_lambda_", iteration, ".RDS")
 saveRDS(sim_lambda_results, file = lambda_file)
 
 #Store lambda results
-full_A_file <- paste0("cluster_code_new/Setting_",sim_setting_idx,"/sim_full_A_", iteration, ".RDS")
+full_A_file <- paste0("Setting_",sim_setting_idx,"/sim_full_A_", iteration, ".RDS")
 saveRDS(sim_full_A_selection_results, file = full_A_file)
 
