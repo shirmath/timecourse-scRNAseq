@@ -98,7 +98,7 @@ sim_A_results <- array(NA, dim = c(3,J, J,nsim),
                                        "iter" = 1:nsim))
 
 sim_lambda_results <- array(NA, dim = c(J, 2, nsim),
-                            dimnames = list("row_idx" = 1:25,
+                            dimnames = list("row_idx" = 1:J,
                                             "selection_criteria" = c("bic", "oracle"),
                                             "iter" = 1:nsim))
 
