@@ -18,19 +18,14 @@ task_num <- as.numeric(commandArgs(trailingOnly=TRUE)[1])
   
 #GET ITERATION NUMBER OF TASK FOR KEEPING TRACK OF RESULTS
 # The iteration number is passed as a command line argument in the sbatch script:a
-iteration <- (task_num - 1) %% 25 + 1
-
-#set iteration manually for testing on local machine
-iteration <- 2
+iteration <- ifelse(is.na(task_num), 2, (task_num - 1) %% 25 + 1)
 
 #SET UP SETTINGS FOR SIMULATION
 
 #CHANGE THIS FOR DIFFERENT SIM SETTINGS (RECALL THERE ARE 36 TOTAL SETTINGS)
 #sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0-9]+"))
-sim_setting_idx <- (task_num-1) %/% 25 + 1
+sim_setting_idx <- ifelse(is.na(task_num), 5, (task_num-1) %/% 25 + 1)
 
-# set setting idx manually for testing code on local machine
-sim_setting_idx <- 5
 
 # load sim settings dataframe to set simulation settings appropriately
 sim_settings_df <- readRDS(here("cluster_code_new/sim_settings_df.rds"))
@@ -95,16 +90,16 @@ sim_Sigma_results <- array(NA, dim = c(J,J,nsim),
                                            "column" = 1:J,
                                            "iter" = 1:nsim))
 
-#bic is computed using n*(m-1) as sample size in BIC computation
-#bic2 is computed using n as sample size in BIC computation
-sim_A_results <- array(NA, dim = c(4,J, J,nsim),
-                       dimnames = list("est_method" = c("mom_nopen", "mom_pen_bic", "mom_pen_bic2", "mom_pen_oracle"),
+#bic is computed using n as sample size in BIC computation
+sim_A_results <- array(NA, dim = c(3,J, J,nsim),
+                       dimnames = list("est_method" = c("mom_nopen", "mom_pen_bic", "mom_pen_oracle"),
                                        "row" = 1:J,
                                        "column" = 1:J,
                                        "iter" = 1:nsim))
 
-sim_lambda_results <- array(NA, dim = c(3, nsim),
-                            dimnames = list("selection_criteria" = c("bic", "bic2", "oracle"),
+sim_lambda_results <- array(NA, dim = c(J, 2, nsim),
+                            dimnames = list("row_idx" = 1:25,
+                                            "selection_criteria" = c("bic", "oracle"),
                                             "iter" = 1:nsim))
 
 sim_full_A_selection_results <- vector(mode = "list")
@@ -128,33 +123,33 @@ for (i in 1:nsim) {
   sim_A_results["mom_nopen", , ,i] <- mom_nopen_est$A
   
   #fit penalized MoM estimator
-  lambda_max <- 2 * max(abs(mom_nopen_est$P %*% t(mom_nopen_est$Sigma_Z))) #this lambda guarantees 0 selected edges
-  lambda_grid <- exp(seq(log(lambda_max), log(lambda_max * lambda_min_ratio), length.out = lambda_N))
+  #get vector of lambdas that guarantee 0 selected edges for each sub-problem
+  lambda_max <- 2 * apply(mom_nopen_est$P %*% t(mom_nopen_est$Sigma_Z), 1, function(x) {max(abs(x))}) 
+  # create matrix of lambda_grids for each subproblem so that the j-th column has lambda grid for j-th subproblem
+  lambda_grid_mat <- sapply(lambda_max, function (x) {exp(seq(log(x), log(x * lambda_min_ratio), length.out = lambda_N))})
+  # compute weighting matrix
+  sd_z <- sqrt(diag(mom_nopen_est$Sigma_Z))
+  W <- outer(1 / sd_z, sd_z)
   sim_full_A_selection_results[[i]] <- mom_pen_result <- mom_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = O, 
-                                                A_init = mom_nopen_est$A, Sigma_Z_est = mom_nopen_est$Sigma_Z, P_est = mom_nopen_est$P, 
-                                                lambda_grid = lambda_grid, covariates = TRUE)
+                                                A_init = mom_nopen_est$A, Sigma_Z_est = mom_nopen_est$Sigma_Z, P_est = mom_nopen_est$P, W_est = W,
+                                                lambda_grid = lambda_grid_mat, covariates = TRUE)
   
-  #get index of selected lambda according to BIC criterion
-  bic_selected_idx <- which.min(mom_pen_result$bic_results$bic)
-  bic2_selected_idx <- which.min(mom_pen_result$bic_results$bic2)
-  #get index of oracle selected lambda
-  selected_edges <- apply(mom_pen_result$A_est_results, 1, function (x) {which(x != 0)})
-  tpr_edges_df <- data.frame("lambda" = lambda_grid,
-                             "tpr" = sapply(selected_edges, function (x) {length(intersect(x, A_true_supp))/length(A_true_supp)}),
-                             "edges" = sapply(selected_edges, function (x) {length(x)}))
-  oracle_selected_lambda <- tpr_edges_df %>% 
-    filter(tpr == max(tpr_edges_df$tpr)) %>%
-    filter(edges == min(edges)) %>%
-    dplyr::select(lambda) %>%
-    pull() %>%
-    min()
-  oracle_selected_idx <- which(tpr_edges_df$lambda == oracle_selected_lambda)
-  sim_A_results["mom_pen_bic", , , i] <- mom_pen_result$A_est_results[bic_selected_idx, ,]
-  sim_A_results["mom_pen_bic2", , , i] <- mom_pen_result$A_est_results[bic2_selected_idx, ,]
-  sim_A_results["mom_pen_oracle", , ,i] <- mom_pen_result$A_est_results[oracle_selected_idx, ,]
-  sim_lambda_results["bic", i] <- lambda_grid[bic_selected_idx]
-  sim_lambda_results["bic2", i] <- lambda_grid[bic2_selected_idx]
-  sim_lambda_results["oracle", i] <- lambda_grid[oracle_selected_idx]
+  #get index of selected lambda for each row according to BIC criterion, and also record which lambda is selected by BIC for each row
+  bic_selected_indices <- sapply(mom_pen_result$bic_results, function (x) {which.min(x$bic)})
+  bic_selected_lambdas <- sapply(mom_pen_result$bic_results, function (x) {x$lambda[which.min(x$bic)]})
+  #get indices of oracle selected lambda for each row
+  # first get what support is selected by each lambda on grid for each row and get list of true support of A by row
+  true_edges_by_row <- apply(A, 1, function (x) {which(x != 0)})
+  selected_edges_by_row <- lapply(mom_pen_result$A_est_results, function (x) {
+    apply(x, 1, function (y) {which(y != 0)})
+  })
+  oracle_selected_lambdas <- mapply(get_oracle_lambda, selected_edges_by_row, true_edges_by_row)
+  oracle_selected_indices <- mapply(function (x,y) {which(as.numeric(rownames(x)) == y)}, mom_pen_result$A_est_results, oracle_selected_lambdas)
+  # get the bic selected estimate for each row of A to report estimated A based on lambdas selected by BIC
+  sim_A_results["mom_pen_bic", , , i] <- t(mapply(function (x, y) {x[y, ]}, mom_pen_result$A_est_results, bic_selected_indices))
+  sim_A_results["mom_pen_oracle", , ,i] <- t(mapply(function (x, y) {x[y, ]}, mom_pen_result$A_est_results, oracle_selected_indices))
+  sim_lambda_results[ ,"bic", i] <- bic_selected_lambdas
+  sim_lambda_results[,"oracle", i] <- oracle_selected_lambdas
 }
 
 #SAVE RESULTS

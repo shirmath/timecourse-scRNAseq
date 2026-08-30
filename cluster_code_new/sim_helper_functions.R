@@ -54,3 +54,27 @@ make_Sigma <- function(J, lower, upper) {
   
   return(Sigma)
 }
+
+# function to get the oracle selected lambda for a particular row of A estimate
+# A row estimates - list of length n_lambdas of support selected for each value of lambda grid for row under consideration
+# true A row support - true support given row of A under consideration
+get_oracle_lambda <- function(selected_edges_for_row, A_row_true_supp) {
+  # make dataframe of tpr/fpr for each lambda's estimate
+  tpr_edges_df <- data.frame("lambda" = as.numeric(names(selected_edges_for_row)),
+                             "tpr" = if (length(A_row_true_supp) > 0) 
+                             {sapply(selected_edges_for_row, function (x) {length(intersect(x, A_row_true_supp))/length(A_row_true_supp)})}
+                             else {ifelse(length(selected_edges_for_row) == 0, 1, 0)},
+                             "edges" = sapply(selected_edges_for_row, function (x) {length(x)}))
+  
+ # get selected lambda value
+ oracle_selected_lambda <- tpr_edges_df %>% 
+   filter(tpr == max(tpr_edges_df$tpr)) %>%
+   filter(edges == min(edges)) %>%
+   filter(lambda == min(lambda)) %>%
+    dplyr::select(lambda) %>%
+    pull() %>%
+    min()
+  
+  return(oracle_selected_lambda)
+}
+
