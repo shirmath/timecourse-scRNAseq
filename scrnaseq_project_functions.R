@@ -104,6 +104,27 @@ sim_data_cov <- function(n, m, Sigma, A, beta) {
               "Sigma_Z" = Sigma_Z))
 }
 
+# HELPER FUNCTION TO GET PSD ESTIMATES OF COVARIANCE MATRICES
+# Projects a symmetric matrix onto the nearest PSD matrix (in Frobenius norm)
+# by clipping negative eigenvalues to a small floor.
+project_psd <- function(Sigma, eps = 1e-8) {
+  # enforce exact symmetry first -- asymmetry from independent off-diagonal
+  # estimation (as in Sigma_Z_est) can otherwise cause eigen() to return
+  # complex eigenvalues
+  Sigma_sym <- (Sigma + t(Sigma)) / 2
+  
+  eig <- eigen(Sigma_sym, symmetric = TRUE)
+  
+  vals_clipped <- pmax(eig$values, eps)
+  
+  Sigma_psd <- eig$vectors %*% diag(vals_clipped, nrow = length(vals_clipped)) %*% t(eig$vectors)
+  
+  # re-symmetrize to clean up floating-point asymmetry from the matrix product
+  Sigma_psd <- (Sigma_psd + t(Sigma_psd)) / 2
+  
+  return(Sigma_psd)
+}
+
 
 #FUNCTION TO COMPUTE MoM ESTIMATES (w/out covariates)
 mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
@@ -124,18 +145,19 @@ mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
   diag(Sigma_Z_hat) <- log(Y2_mean - Y_mean) - 2*log(Y_mean)
 
   for (i in 1:J) {
-    for(j in 1:J) {
-      if (i != j) {
+    for(j in seq_len(i - 1)) {
         #compute terms necessary for estimator
         Y_ij_mean <- mean(apply(Y, 3, function (x) x[,i]*x[,j]), na.rm = TRUE)
         #compute estimate for ij element
-        Sigma_Z_hat[i,j] <- log(Y_ij_mean) - log(Y_mean[i]) - log(Y_mean[j])
-      }
+        Sigma_Z_hat[i,j] <- Sigma_Z_hat[j,i] <- log(Y_ij_mean) - log(Y_mean[i]) - log(Y_mean[j])
     }
   }
   
   colnames(Sigma_Z_hat) <- unlist(dimnames(Y)[2])
   rownames(Sigma_Z_hat) <- unlist(dimnames(Y)[2])
+  
+  # project estimate on to the PSD cone
+  Sigma_Z_hat <- project_psd(Sigma_Z_hat)
 
   #estimator for A
   P <- matrix(NA, nrow = J, ncol = J)
@@ -224,21 +246,23 @@ mom_estimator_cov <- function(Y, X, O, penalty = FALSE, lambda) {
   rate_gamma_part <- aperm(apply(X, c(1,3), function (x) {t(c(1,x)) %*% gamma_mat}), c(2,1,3))
   rate_est <- aperm(array(t(apply(rate_gamma_part, 2, function (x) {exp(x + O)})), dim = c(J, m, n)), c(2,1,3))
 
-  #get Sigma_Z estimates
+  #get Sigma_Z estimates from raw moments
   Sigma_Z_est <- matrix(NA, J, J)
   colnames(Sigma_Z_est) <- unlist(dimnames(Y)[2])
   rownames(Sigma_Z_est) <- unlist(dimnames(Y)[2])
   diag(Sigma_Z_est) <- log(apply((Y^2 - Y)/(rate_est^2), 2, function (x) {mean(x, na.rm = TRUE)}))
   
+  
   for (j in 1:J) {
-    for (k in 1:j) {
-      if (k != j) {
+    for (k in seq_len(j - 1)) {
         Y_jk_mat <- apply(Y, 3, function (x) {x[,j]*x[,k]})
         rate_jk_mat <- apply(rate_est, 3, function (x) {x[,j]*x[,k]})
         Sigma_Z_est[j,k] <- Sigma_Z_est[k,j] <- log(mean(Y_jk_mat/rate_jk_mat, na.rm = TRUE))
-      }
     }
   }
+  
+  # project Sigma_Z estimate from raw moments on to PSD cone to ensure estimate is indeed PSD
+  Sigma_Z_est <- project_psd(Sigma_Z_est)
   
   #remove matrices created for temporary computations in loop
   rm(Y_jk_mat)
@@ -2083,8 +2107,7 @@ vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covari
   #bic is computed using n*(m-1) as sample size in BIC computation
   selection_results <- data.table("lambda" = lambda_grid,
                                   "edges" = rep(NA, lambda_N),
-                                  "bic" = rep(NA, lambda_N),
-                                  "bic2" = rep(NA, lambda_N))
+                                  "bic" = rep(NA, lambda_N))
   
   #set up list to store estimated parameters for each lambda
   full_estimates <- vector(mode = "list")
@@ -2107,7 +2130,7 @@ vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covari
                                     init_S = c(init_params$S),
                                     init_Sigma = c(init_params$Sigma),
                                     init_A = c(init_params$A),
-                                    optim_method = "optim",
+                                    optim_method = "nloptr",
                                     max.iter = 5000,
                                     tol = 1e-5,
                                     verbose = FALSE,
@@ -2131,7 +2154,7 @@ vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covari
                                       init_S = c(init_params$S),
                                       init_Sigma = c(init_params$Sigma),
                                       init_A = c(A_est),
-                                      optim_method = "optim",
+                                      optim_method = "nloptr",
                                       max.iter = 1000,
                                       tol = 1e-5,
                                       verbose = FALSE,
@@ -2142,7 +2165,7 @@ vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covari
     
     
     #compute criteria for each lambda
-    selection_results$bic[j] <- -2*obj_function2_cov(data = list_data, params = vi_pen_refit) + log(n_lags)*length(A_est_supp)
+    selection_results$bic[j] <- -2*obj_function2_cov(data = list_data, params = vi_pen_refit) + log(n)*length(A_est_supp)
     
   }
   

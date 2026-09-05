@@ -10,7 +10,7 @@ library(Matrix)
 # sparsity_level (expected proportion of non-zero values per row),
 # lower (lower bound for values of A)
 # upper (upper bound for values of A)
-make_A <- function(J, sparsity_level, lower, upper) {
+make_A <- function(J, sparsity_level, lower, upper, max_attempts = 100) {
   
   # generate matrices until stability condition fulfilled
   A <- matrix(0, J, J)
@@ -35,12 +35,13 @@ make_A <- function(J, sparsity_level, lower, upper) {
     attempts <- attempts + 1
     
     # break if attempts exceeds 100 and return warnings
-    if (attempts > 100) {
+    if (attempts > max_attempts) {
       break
     }
   }
   
   if (!stable) {
+    print("A does not satisfy stability condition!")
     warning("A does not satsify stability condition.")
   }
   

@@ -24,7 +24,7 @@ iteration <- ifelse(is.na(task_num), 2, (task_num - 1) %% 3 + 1)
 
 #CHANGE THIS FOR DIFFERENT SIM SETTINGS (RECALL THERE ARE 36 TOTAL SETTINGS)
 #sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0-9]+"))
-sim_setting_idx <- ifelse(is.na(task_num), 5, (task_num-1) %/% 3 + 1)
+sim_setting_idx <- ifelse(is.na(task_num), 1, (task_num-1) %/% 3 + 1)
 
 
 # load sim settings dataframe to set simulation settings appropriately
@@ -179,4 +179,3 @@ saveRDS(sim_lambda_results, file = lambda_file)
 #Store lambda results
 full_A_file <- paste0("Setting_",sim_setting_idx,"/sim_full_A_", iteration, ".RDS")
 saveRDS(sim_full_A_selection_results, file = full_A_file)
-
