@@ -1490,26 +1490,26 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
 
       coord_grad <- switch(coord_name,
                            "Beta" = beta_grad2,
-                           "M" = M_grad2_cov_sample,
-                           "S" = S_grad2_cov_sample
+                           "M" = M_grad2_cov,
+                           "S" = S_grad2_cov
       )
 
       coord_obj <- switch(coord_name,
                           "Beta" = obj_function2_for_beta,
-                          "M" = obj_function2_cov_M_sample,
-                          "S" = obj_function2_cov_S_sample
+                          "M" = obj_function2_cov_for_M,
+                          "S" = obj_function2_cov_for_S
       )
 
       coord_lower <- switch(coord_name,
                             "Beta" = rep(-Inf, p*J),
-                            "M" = rep(-Inf, m*J),
-                            "S" = rep(1e-10, (m-1)*J)
+                            "M" = rep(-Inf, n*m*J),
+                            "S" = rep(1e-10, n*(m-1)*J)
       )
 
       coord_upper <- switch(coord_name,
                             "Beta" = rep(Inf, p*J),
-                            "M" = rep(Inf, m*J),
-                            "S" = rep(Inf, (m-1)*J)
+                            "M" = rep(Inf, n*m*J),
+                            "S" = rep(Inf, n*(m-1)*J)
       )
 
       if (coord_name == "A") {
@@ -1611,142 +1611,143 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
         #set up array to store update value of coordinate
         S_update <- array(0, dim = c(m, J, n))
         #optimize only parameters not corresponding to the first timepoint by each sample block
-        for (i in 1:n) {
-          #if verbose, print out sample index
-          if (verbose) {print(paste0("sample: ", i))}
-          #get current sample index
-          temp_idx <- i
-          
-          #optimize current sample's parameters
-          S_2m_sample <- coord_current_val[2:m, ,temp_idx]
-          temp_opt_res <- nloptr(x0 = c(S_2m_sample),
-                                 eval_f = coord_obj,
-                                 eval_grad_f = coord_grad,
-                                 opts = list(algorithm = "NLOPT_LD_CCSAQ",
-                                             xtol_rel = 1e-4,
-                                             check_derivatives = FALSE,
-                                             maxeval = m*J
-                                             #ftol_rel = 1e-4
-                                 ),
-                                 lb = coord_lower,
-                                 ub = coord_upper,
-                                 scale = -1,
-                                 Y_sample = obs$Y[ , ,temp_idx],
-                                 X_sample = obs$X[ , ,temp_idx],
-                                 O = obs$O[ ,temp_idx],
-                                 M_sample = current_params$M[ , ,temp_idx],
-                                 A = current_params$A,
-                                 Sigma = current_params$Sigma,
-                                 beta = current_params$Beta
-                                 #params = current_params,
-                                 #data = obs,
-                                 #sample_idx = temp_idx
-                                 )
-          
-          if (verbose) {
-            print(paste0("Opt Status: ",temp_opt_res$status))
-            print(paste0("Opt Iters: ",temp_opt_res$iterations))
-          }
-          
-          S_update[2:m, ,temp_idx] <- temp_opt_res$solution
-            
-        }
+        # for (i in 1:n) {
+        #   #if verbose, print out sample index
+        #   if (verbose) {print(paste0("sample: ", i))}
+        #   #get current sample index
+        #   temp_idx <- i
+        #   
+        #   #optimize current sample's parameters
+        #   S_2m_sample <- coord_current_val[2:m, ,temp_idx]
+        #   temp_opt_res <- nloptr(x0 = c(S_2m_sample),
+        #                          eval_f = coord_obj,
+        #                          eval_grad_f = coord_grad,
+        #                          opts = list(algorithm = "NLOPT_LD_CCSAQ",
+        #                                      xtol_rel = 1e-4,
+        #                                      check_derivatives = FALSE,
+        #                                      maxeval = m*J
+        #                                      #ftol_rel = 1e-4
+        #                          ),
+        #                          lb = coord_lower,
+        #                          ub = coord_upper,
+        #                          scale = -1,
+        #                          Y_sample = obs$Y[ , ,temp_idx],
+        #                          X_sample = obs$X[ , ,temp_idx],
+        #                          O = obs$O[ ,temp_idx],
+        #                          M_sample = current_params$M[ , ,temp_idx],
+        #                          A = current_params$A,
+        #                          Sigma = current_params$Sigma,
+        #                          beta = current_params$Beta
+        #                          #params = current_params,
+        #                          #data = obs,
+        #                          #sample_idx = temp_idx
+        #                          )
+        #   
+        #   if (verbose) {
+        #     print(paste0("Opt Status: ",temp_opt_res$status))
+        #     print(paste0("Opt Iters: ",temp_opt_res$iterations))
+        #   }
+        #   
+        #   S_update[2:m, ,temp_idx] <- temp_opt_res$solution
+        #     
+        # }
+        # 
+        # #store updated parameters to new coord vec
+        # new_coord_vec <- c(S_update)
         
-        #store updated parameters to new coord vec
-        new_coord_vec <- c(S_update)
         #code for optimizing over all S parameters all at once
-          # S_2m <- coord_current_val[2:m, , ]
-          # opt_res <- nloptr(x0 = c(S_2m),
-          #                   eval_f = coord_obj,
-          #                   eval_grad_f = coord_grad,
-          #                   opts = list(algorithm = "NLOPT_LD_LBFGS",
-          #                               xtol_rel = 1e-4,
-          #                               check_derivatives = FALSE,
-          #                               maxeval = n*m*J
-          #                               #ftol_rel = 1e-4
-          #                   ),
-          #                   lb = coord_lower,
-          #                   ub = coord_upper,
-          #                   scale = -1,
-          #                   params = current_params,
-          #                   data = obs)
-          # if (verbose) {
-          #   print(paste0("S Opt Status: ",opt_res$status))
-          #   print(paste0("S Opt Message: ",opt_res$message))
-          # }
-          # new_coord_val <- array(0, dim = c(m, J, n))
-          # new_coord_val[2:m, , ] <- opt_res$solution
-          # new_coord_vec <- c(new_coord_val)
+        S_2m <- coord_current_val[2:m, , ]
+        opt_res <- nloptr(x0 = c(S_2m),
+                          eval_f = coord_obj,
+                          eval_grad_f = coord_grad,
+                          opts = list(algorithm = "NLOPT_LD_CCSAQ",
+                                      xtol_rel = 1e-4,
+                                      check_derivatives = FALSE,
+                                      maxeval = n*m*J
+                                      #ftol_rel = 1e-4
+                          ),
+                          lb = coord_lower,
+                          ub = coord_upper,
+                          scale = -1,
+                          params = current_params,
+                          data = obs)
+        if (verbose) {
+          print(paste0("S Opt Status: ",opt_res$status))
+          print(paste0("S Opt Message: ",opt_res$message))
+        }
+        new_coord_val <- array(0, dim = c(m, J, n))
+        new_coord_val[2:m, , ] <- opt_res$solution
+        new_coord_vec <- c(new_coord_val)
           
       } else if (coord_name == "M") {
         #set up array to store update value of coordinate
         M_update <- array(0, dim = c(m, J, n))
         
-        #optimize only parameters not corresponding to the first timepoint by each sample block
-        for (i in 1:n) {
-          #if verbose, print out sample index
-          if (verbose) {print(paste0("sample: ", i))}
-          
-          #get current sample index
-          temp_idx <- i
-          
-          #optimize current sample's parameters
-          M_sample <- coord_current_val[, ,temp_idx]
-          temp_opt_res <- nloptr(x0 = c(M_sample),
-                                 eval_f = coord_obj,
-                                 eval_grad_f = coord_grad,
-                                 opts = list(algorithm = "NLOPT_LD_LBFGS",
-                                             xtol_rel = 1e-4,
-                                             check_derivatives = FALSE,
-                                             maxeval = m*J
-                                             #ftol_rel = 1e-4
-                                 ),
-                                 lb = coord_lower,
-                                 ub = coord_upper,
-                                 scale = -1,
-                                 #params = current_params,
-                                 #data = obs,
-                                 #sample_idx = temp_idx,
-                                 Y_sample = obs$Y[ , ,temp_idx],
-                                 X_sample = obs$X[ , ,temp_idx],
-                                 O = obs$O[ ,temp_idx],
-                                 S_sample = current_params$S[ , ,temp_idx],
-                                 A = current_params$A,
-                                 Sigma = current_params$Sigma,
-                                 beta = current_params$Beta)
-          
-          if (verbose) {
-            print(paste0("Opt Status: ",temp_opt_res$status))
-            print(paste0("Opt Iterations: ",temp_opt_res$iterations))
-          }
-          
-          M_update[, ,temp_idx] <- temp_opt_res$solution
-          
-        }
-        
-        #store updated parameters to new coord vec
-        new_coord_vec <- c(M_update)
+        #optimize parameters by each sample block
+        # for (i in 1:n) {
+        #   #if verbose, print out sample index
+        #   if (verbose) {print(paste0("sample: ", i))}
+        #   
+        #   #get current sample index
+        #   temp_idx <- i
+        #   
+        #   #optimize current sample's parameters
+        #   M_sample <- coord_current_val[, ,temp_idx]
+        #   temp_opt_res <- nloptr(x0 = c(M_sample),
+        #                          eval_f = coord_obj,
+        #                          eval_grad_f = coord_grad,
+        #                          opts = list(algorithm = "NLOPT_LD_CCSAQ",
+        #                                      xtol_rel = 1e-4,
+        #                                      check_derivatives = FALSE,
+        #                                      maxeval = m*J
+        #                                      #ftol_rel = 1e-4
+        #                          ),
+        #                          lb = coord_lower,
+        #                          ub = coord_upper,
+        #                          scale = -1,
+        #                          #params = current_params,
+        #                          #data = obs,
+        #                          #sample_idx = temp_idx,
+        #                          Y_sample = obs$Y[ , ,temp_idx],
+        #                          X_sample = obs$X[ , ,temp_idx],
+        #                          O = obs$O[ ,temp_idx],
+        #                          S_sample = current_params$S[ , ,temp_idx],
+        #                          A = current_params$A,
+        #                          Sigma = current_params$Sigma,
+        #                          beta = current_params$Beta)
+        #   
+        #   if (verbose) {
+        #     print(paste0("Opt Status: ",temp_opt_res$status))
+        #     print(paste0("Opt Iterations: ",temp_opt_res$iterations))
+        #   }
+        #   
+        #   M_update[, ,temp_idx] <- temp_opt_res$solution
+        #   
+        # }
+        # 
+        # #store updated parameters to new coord vec
+        # new_coord_vec <- c(M_update)
         
         #code for optimizing over all M parameters all at once
-        # opt_res <- nloptr(x0 = coord_current_val_vec,
-        #                   eval_f = coord_obj,
-        #                   eval_grad_f = coord_grad,
-        #                   opts = list(algorithm = "NLOPT_LD_LBFGS",
-        #                               xtol_rel = 1e-4,
-        #                               check_derivatives = FALSE,
-        #                               maxeval = n*m*J
-        #                               #ftol_rel = 1e-4
-        #                   ),
-        #                   lb = coord_lower,
-        #                   ub = coord_upper,
-        #                   scale = -1,
-        #                   params = current_params,
-        #                   data = obs)
-        # if (verbose) {
-        #   print(paste0("M Opt Status: ",opt_res$status))
-        #   print(paste0("M Opt Message: ",opt_res$message))
-        # }
-        # new_coord_vec <- opt_res$solution
+        opt_res <- nloptr(x0 = coord_current_val_vec,
+                          eval_f = coord_obj,
+                          eval_grad_f = coord_grad,
+                          opts = list(algorithm = "NLOPT_LD_CCSAQ",
+                                      xtol_rel = 1e-4,
+                                      check_derivatives = FALSE,
+                                      maxeval = n*m*J
+                                      #ftol_rel = 1e-4
+                          ),
+                          lb = coord_lower,
+                          ub = coord_upper,
+                          scale = -1,
+                          params = current_params,
+                          data = obs)
+        if (verbose) {
+          print(paste0("M Opt Status: ",opt_res$status))
+          print(paste0("M Opt Message: ",opt_res$message))
+        }
+        new_coord_vec <- opt_res$solution
       }
 
       #assign updated coordinate value to current_params object
