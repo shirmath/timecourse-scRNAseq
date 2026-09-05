@@ -13,15 +13,20 @@ library(Matrix)
 make_A <- function(J, sparsity_level, lower, upper) {
   
   # generate matrices until stability condition fulfilled
+  A <- matrix(0, J, J)
   stable <- FALSE
   attempts <- 0
   while(!stable) {
     # first, determine which values will have non-zero value
-    A <- matrix(rbinom(J^2, 1, sparsity_level), J, J, byrow = TRUE)
+    for (i in 1:J) {
+      A[i, ] <- rbinom(J, 1, sparsity_level)
+    }
     
     # after non-zero values are determined, set value to be within range
     A_vals_vec <- runif(sum(A), lower, upper)
-    A[which(A != 0)] <- A_vals_vec
+    A_sign_vec <- sample(c(-1, 1), size = length(A_vals_vec), replace = TRUE)
+    A[which(A != 0)] <- A_vals_vec*A_sign_vec
+    
     
     # check if A satisfies stability condition (all eigenvalues have modulus less than 1)
     stable <- max(Mod(eigen(A)$values)) < 1
@@ -30,7 +35,7 @@ make_A <- function(J, sparsity_level, lower, upper) {
     attempts <- attempts + 1
     
     # break if attempts exceeds 100 and return warnings
-    if (attempts) {
+    if (attempts > 100) {
       break
     }
   }
