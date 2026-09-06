@@ -18,13 +18,13 @@ task_num <- as.numeric(commandArgs(trailingOnly=TRUE)[1])
   
 #GET ITERATION NUMBER OF TASK FOR KEEPING TRACK OF RESULTS
 # The iteration number is passed as a command line argument in the sbatch script:a
-iteration <- ifelse(is.na(task_num), 2, (task_num - 1) %% 3 + 1)
+iteration <- ifelse(is.na(task_num), 2, (task_num - 1) %% 20 + 1)
 
 #SET UP SETTINGS FOR SIMULATION
 
 #CHANGE THIS FOR DIFFERENT SIM SETTINGS (RECALL THERE ARE 36 TOTAL SETTINGS)
 #sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0-9]+"))
-sim_setting_idx <- ifelse(is.na(task_num), 1, (task_num-1) %/% 3 + 1)
+sim_setting_idx <- ifelse(is.na(task_num), 1, (task_num-1) %/% 20 + 1)
 
 
 # load sim settings dataframe to set simulation settings appropriately
@@ -48,7 +48,7 @@ Sigma_upper <- sim_settings_df$Sigma_upper[sim_setting_idx]
 
 
 #setup for simulation
-nsim <- 4 #number of sims
+nsim <- 10 #number of sims
 lambda_N <- 100 #number of lambda values
 lambda_min_ratio <- 0.01 # for defining the minimum lambda
 
