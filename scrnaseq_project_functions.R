@@ -175,18 +175,21 @@ mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
   if (!penalty) {
     A_hat <- P %*% solve(Sigma_Z_hat)
   } else {
-    
-    #estimation using FISTA to solve for A
-    A_init <- P %*% solve(Sigma_Z_hat)
-    current_params <- list("Sigma_Z" = Sigma_Z_hat, "A" = A_init, "P" = P)
-    obs <- list("Y" = Y)
-    #A_hat <- matrix(optim_A_penalty(obs = obs, current_params = current_params, est = "mom", line_search = FALSE, lambda = lambda), J, J)
-    A_hat <- mom_optim_A(A_init = A_init, Sigma_Z = current_params$Sigma_Z, P = current_params$P, lambda, tol = 1e-7, max.iter = 2000)
+    # compute weights for penalty
+    sd_z <- sqrt(diag(Sigma_Z_hat))
+    W <- outer(1/sd_z, sd_z)
+    # solve row-by-row instead of one call on the whole matrix
+    A_hat <- matrix(NA, J, J)
+    for (j in 1:J) {
+      A_hat[j, ] <- mom_optim_A(A_init = NULL, Sigma_Z = Sigma_Z_hat,
+                                p = P[j, ], w = W[j, ], lambda = lambda,
+                                tol = 1e-7, max.iter = 2000)
+    }
   }
   
 
   #estimator for Sigma
-  Sigma_hat <- Sigma_Z_hat - P %*% solve(Sigma_Z_hat) %*% t(P)
+  Sigma_hat <- Sigma_Z_hat - A_hat %*% Sigma_Z_hat %*% t(A_hat)
 
   #return estimates
   return(list("Y" = Y,
@@ -290,12 +293,20 @@ mom_estimator_cov <- function(Y, X, O, penalty = FALSE, lambda) {
   if (!penalty) {
     A_est <- P %*% solve(Sigma_Z_est)
   } else {
-    A_est <- mom_optim_A(A_init = NULL, Sigma_Z_est, P, lambda)
+    sd_z <- sqrt(diag(Sigma_Z_est))
+    W <- outer(1/sd_z, sd_z)
+    # solve row-by-row instead of one call on the whole matrix
+    A_est <- matrix(NA, J, J)
+    for (j in 1:J) {
+      A_est[j, ] <- mom_optim_A(A_init = NULL, Sigma_Z = Sigma_Z_est,
+                                p = P[j, ], w = W[j, ], lambda = lambda,
+                                tol = 1e-7, max.iter = 2000)
+    }
   }
  
   
   #get estimator for Sigma using Sigma_Z and A estimators
-  Sigma_est <- Sigma_Z_est - P %*% solve(Sigma_Z_est) %*% t(P)
+  Sigma_est <- Sigma_Z_est - A_est %*% Sigma_Z_est %*% t(A_est)
   
   #get estimator for beta
   beta_est <- gamma_mat
@@ -1439,8 +1450,9 @@ vi_estimator_r <- function(sim_data_obj, init_mu, init_M, init_S, init_Sigma_Z, 
 
 
 #ELBO (CONDITION ON FIRST TIMEPOINT OF Z) OPTIMIZATION FUNCTION
-#Y should be array of observations with dimensions m x J x n
-#init_mu is a vector with J components specifying initial value of mu
+#Y should be array of observations with dimensions m x J x n (timepoints x categories x realizations of time series)
+#X should be array of observed covariates with dimensions m x p x n (timepoints x number of covariates x realizations of time series)
+#W is the matrix of weights used for weighting penalty
 #init_beta is a matrix of dimension (p+1) x J specifying the coefficients for the intercept and p covariates across the J categories
 #init_M is vector of length m x J x n specifying initial value of variational mean parameters
 #init_S is vector of length m x J x n specifying initial value of variational variance parameters
@@ -1456,6 +1468,7 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
                           skip_coords = NA, 
                           penalty = FALSE, 
                           lambda = 1, 
+                          W = 1,
                           refit = FALSE) {
 
   #get data sample and parameter dimensions
@@ -1482,7 +1495,7 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
   #set up before starting optimization loop
   param_names <- names(init_params)
   current_params <- init_params
-  current_obj_val <- obj_function2_cov(obs, current_params) + penalty*sum(abs(current_params$A))
+  current_obj_val <- obj_function2_cov(obs, current_params) + penalty*lambda*sum(W*abs(current_params$A))
   iter <- 0
   converged <- FALSE
 
@@ -1574,7 +1587,7 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
           new_coord_vec <- c(A_update)
         } else {
           A_update <- vi2_optim2_A(A_init = matrix(coord_current_val_vec, J, J), Sigma = current_params$Sigma, M = current_params$M, S = current_params$S, 
-                                  lambda = lambda)
+                                  W = W, lambda = lambda, verbose = verbose)
           new_coord_vec <- c(A_update)
         }
 
@@ -1785,7 +1798,7 @@ vi_estimator2_cov <- function(Y, X, O, init_beta, init_M, init_S, init_Sigma, in
     }
 
     #check if converged according to some criterion
-    current_obj_val <- obj_function2_cov(obs, current_params) + sum(abs(current_params$A))
+    current_obj_val <- obj_function2_cov(obs, current_params) + penalty*lambda*sum(W*abs(current_params$A))
     rel_diff <- abs((current_obj_val - past_obj_val)/past_obj_val)
     
     if (verbose) {
@@ -1889,7 +1902,7 @@ mom_optim_A <- function(A_init = NULL, Sigma_Z, p, w, lambda, tol = 1e-7, max.it
 
 
 #OPTIMIZATION FUNCTION FOR ESTIMATING A WITH PENALIZED VI2
-vi2_optim_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter = 2000) {
+vi2_optim_A <- function(A_init = NULL, Sigma, M, S, lambda, W, tol = 1e-7, max.iter = 2000) {
 
   #get number of categories
   J <- nrow(Sigma)
@@ -1919,19 +1932,19 @@ vi2_optim_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter
   for (t in 1:(m-1)) {
     Mt_M1 <- Mt_M1 + M[t,,] %*% t(M[t+1,,])
   }
-  obj_prev <- -sum(diag((A_prev %*% Mt_M1 -0.5*(A_prev %*% quad_term %*% t(A_prev))) %*% Omega))
+  obj_prev <- -sum(diag((A_prev %*% Mt_M1 -0.5*(A_prev %*% quad_term %*% t(A_prev))) %*% Omega)) + lambda*sum(W*abs(A_prev))
   
   for (it in 1:max.iter) {
     #if (it %% 100 == 0) {print(paste0("Iter ", it-1, " Obj: ", obj_prev))}
     print(paste0("Iter ", it-1, " Obj: ", obj_prev))
     
     Y_grad <- -Omega %*% (t(Mt_M1) - Yk %*% quad_term) 
-    A_new <- sign(Yk - step * Y_grad)*pmax(abs(Yk - step * Y_grad) - step * lambda, 0)
+    A_new <- sign(Yk - step * Y_grad)*pmax(abs(Yk - step * Y_grad) - step * lambda * W, 0)
     
     tk_new = (1 + sqrt(1 + 4 * tk^2)) / 2
     Yk = A_new + ((tk - 1) / tk_new) * (A_new - A_prev)
     
-    obj_new = -sum(diag((A_new %*% Mt_M1 -0.5*(A_new %*% quad_term %*% t(A_new))) %*% Omega))
+    obj_new = -sum(diag((A_new %*% Mt_M1 -0.5*(A_new %*% quad_term %*% t(A_new))) %*% Omega)) + lambda*sum(W*abs(A_prev))
     rel_diff <- ifelse(obj_prev != 0, abs(obj_new - obj_prev) / (abs(obj_prev)), abs(obj_new))
     if (rel_diff < tol) {
       A_prev = A_new
@@ -1948,7 +1961,7 @@ vi2_optim_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter
 
 
 #SLOW ISTA OPTIMIZER
-vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.iter = 20000000, verbose = FALSE) {
+vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, W, tol = 1e-7, max.iter = 20000000, verbose = FALSE) {
   
   #get number of categories
   J <- nrow(Sigma)
@@ -1977,7 +1990,7 @@ vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.ite
   for (t in 1:(m-1)) {
     Mt_M1 <- Mt_M1 + M[t,,] %*% t(M[t+1,,])
   }
-  obj_prev <- -sum(diag((A_prev %*% Mt_M1 -0.5*(A_prev %*% quad_term %*% t(A_prev))) %*% Omega))
+  obj_prev <- -sum(diag((A_prev %*% Mt_M1 -0.5*(A_prev %*% quad_term %*% t(A_prev))) %*% Omega)) + lambda*sum(W*abs(A_prev))
   
   for (it in 1:max.iter) {
     if (verbose & it %% 1000 == 0) {
@@ -1986,12 +1999,12 @@ vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, tol = 1e-7, max.ite
     
     
     A_grad <- -Omega %*% (t(Mt_M1) - A_prev %*% quad_term) 
-    A_new <- sign(A_prev - step * A_grad)*pmax(abs(A_prev - step * A_grad) - step * lambda, 0)
+    A_new <- sign(A_prev - step * A_grad)*pmax(abs(A_prev - step * A_grad) - step * lambda * W, 0)
     
     # tk_new = (1 + sqrt(1 + 4 * tk^2)) / 2
     # Yk = A_new + ((tk - 1) / tk_new) * (A_new - A_prev)
     
-    obj_new = -sum(diag((A_new %*% Mt_M1 -0.5*(A_new %*% quad_term %*% t(A_new))) %*% Omega))
+    obj_new = -sum(diag((A_new %*% Mt_M1 -0.5*(A_new %*% quad_term %*% t(A_new))) %*% Omega)) + lambda*sum(W*abs(A_new))
     rel_diff <- ifelse(obj_prev != 0, abs(obj_new - obj_prev) / (abs(obj_prev)), abs(obj_new))
     if (rel_diff < tol) {
       A_prev = A_new
@@ -2093,7 +2106,7 @@ mom_pen_estimator_selection <- function(Y, X, O, A_init = NULL, Sigma_Z_est, P_e
 # init_params should be list of parameters to use as starting point for estimation (include A as part of this list)
 # lambda_grid should be grid of lambdas for which you want to fit penalized VI estimator
 # covariates is boolean that indicates whether to use VI estimator for model with covariates or the one for model without covariates
-vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covariates = TRUE, verbose = FALSE) {
+vi_pen_estimator_selection <- function(Y, X, O, W, init_params, lambda_grid, covariates = TRUE, verbose = FALSE) {
   
   #get quantities needed for later computations and storing results
   m <- dim(Y)[1]
@@ -2137,6 +2150,7 @@ vi_pen_estimator_selection <- function(Y, X, O, init_params, lambda_grid, covari
                                     skip_coords = NA,
                                     #skip_coords = c("M", "S"),
                                     penalty = TRUE,
+                                    W = W,
                                     lambda = l)$A
     
     
