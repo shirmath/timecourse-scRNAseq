@@ -50,7 +50,7 @@ Sigma_upper <- sim_settings_df$Sigma_upper[sim_setting_idx]
 #setup for simulation
 nsim <- 20 #number of sims
 lambda_N <- 100 #number of lambda values
-lambda_min_ratio <- 0.01 # for defining the minimum lambda
+lambda_min_ratio <- 1/lambda_N # for defining the minimum lambda
 
 #set true parameter values according to sim setting index above
 # use seed 0 to generate so it is same across all simulation with same p and J
