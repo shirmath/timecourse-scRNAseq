@@ -145,14 +145,16 @@ for (i in 1:nsim) {
   
   #fit penalized MoM estimator
   print(paste0("FITTING PENALIZED MOM ESTIMATOR FOR SIM: ", i))
-  #get vector of lambdas that guarantee 0 selected edges for each sub-problem
-  lambda_max <- 2 * apply(mom_nopen_est$P %*% t(mom_nopen_est$Sigma_Z), 1, function(x) {max(abs(x))}) 
-  # create matrix of lambda_grids for each subproblem so that the j-th column has lambda grid for j-th subproblem
-  lambda_grid_mat <- sapply(lambda_max, function (x) {exp(seq(log(x), log(x * lambda_min_ratio), length.out = lambda_N))})
-  # compute weighting matrix
+  # compute weighting matrix (needed below to get lambda_max that accounts for it)
   sd_z <- sqrt(abs(diag(mom_nopen_est$Sigma_Z)))
   W <- outer(1 / sd_z, sd_z)
-  sim_full_mom_selection_results[[i]] <- mom_pen_result <- mom_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = O, 
+  #get vector of lambdas that guarantee 0 selected edges for each sub-problem
+  #(divide by W since the penalty applied to row k, column j is lambda * W[k,j])
+  mom_grad <- mom_nopen_est$P %*% t(mom_nopen_est$Sigma_Z)
+  lambda_max <- 2 * apply(abs(mom_grad) / W, 1, max)
+  # create matrix of lambda_grids for each subproblem so that the j-th column has lambda grid for j-th subproblem
+  lambda_grid_mat <- sapply(lambda_max, function (x) {exp(seq(log(x), log(x * lambda_min_ratio), length.out = lambda_N))})
+  sim_full_mom_selection_results[[i]] <- mom_pen_result <- mom_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = O,
                                                                                      A_init = mom_nopen_est$A, Sigma_Z_est = mom_nopen_est$Sigma_Z, P_est = mom_nopen_est$P, W_est = W,
                                                                                      lambda_grid = lambda_grid_mat, covariates = TRUE)
   
@@ -176,34 +178,31 @@ for (i in 1:nsim) {
   
   #fit penalized VI estimator
   print(paste0("FITTING PENALIZED VI ESTIMATOR FOR SIM: ", i))
-  #set lambda max based on estimates from M, S optimization
-  #find lambda that will guarantee zero A
-  A_mom <- matrix(0, J, J)
-  Omega <- diag(1, J)
-  S_all <- diag(apply(vi_est_nopen$S[1:(m-1), ,], c(2), sum))
-  Mt_M <- matrix(apply(apply(vi_est_nopen$M[1:(m-1),,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
-  quad_term <- S_all + Mt_M
-  Mt_M1 <- matrix(0, J, J)
-  for (t in 1:(m-1)) {
-    Mt_M1 <- Mt_M1 + vi_est_nopen$M[t,,] %*% t(vi_est_nopen$M[t+1,,])
-  }
-  A_grad <- -Omega %*% (t(Mt_M1) - A_mom %*% quad_term)
-  Lconst <- norm(Omega, type = "2") * norm(quad_term, type = "2")
-  lambda_max <- max(abs(A_mom - (1/Lconst)*A_grad))*Lconst #this lambda guarantees 0 selected edges
-  
-  #set up lambda grid
-  lambda_grid <- exp(seq(log(lambda_max), log(lambda_max * lambda_min_ratio), length.out = lambda_N))
-  
-  #fit penalized vi estimator over grid of lambdas and compute selection criteria
+  #set up initial penalized params and compute weights for penalized estimator (needed below to get lambda_max)
   init_pen_params <- vi_est_nopen
   init_pen_params$A <- matrix(0, J, J)
   init_pen_params$Sigma <- diag(1, J)
-  #compute weights for penalized estimator
   vi_nopen_SigmaZ_est <- matrix(solve(diag(1, J*J, J*J) - kronecker(vi_est_nopen$A, vi_est_nopen$A)) %*% c(vi_est_nopen$Sigma), J, J)
   vi_nopen_SigmaZ_est_psd <- project_psd(vi_nopen_SigmaZ_est)
   vi_sd_z <- sqrt(abs(diag(vi_nopen_SigmaZ_est_psd)))
   W_vi <- outer(1/vi_sd_z, vi_sd_z)
-  vi_pen_results <- vi_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = temp_data$O, W_vi, 
+
+  #set lambda max based on estimates from M, S optimization
+  #find lambda that will guarantee zero A (divide by W_vi since the penalty applied
+  #to entry (i,j) is lambda * W_vi[i,j])
+  Omega <- diag(1, J)
+  Mt_M1 <- matrix(0, J, J)
+  for (t in 1:(m-1)) {
+    Mt_M1 <- Mt_M1 + vi_est_nopen$M[t,,] %*% t(vi_est_nopen$M[t+1,,])
+  }
+  A_grad <- -Omega %*% t(Mt_M1) #gradient of smooth part of objective at A = 0
+  lambda_max <- max(abs(A_grad) / W_vi) #this lambda guarantees 0 selected edges
+
+  #set up lambda grid
+  lambda_grid <- exp(seq(log(lambda_max), log(lambda_max * lambda_min_ratio), length.out = lambda_N))
+
+  #fit penalized vi estimator over grid of lambdas and compute selection criteria
+  vi_pen_results <- vi_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = temp_data$O, W_vi,
                                                      init_params = init_pen_params,
                                                      lambda_grid = lambda_grid,
                                                      verbose = TRUE)
