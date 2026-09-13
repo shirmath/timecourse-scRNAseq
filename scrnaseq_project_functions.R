@@ -1920,7 +1920,7 @@ vi2_optim_A <- function(A_init = NULL, Sigma, M, S, lambda, W, tol = 1e-7, max.i
   S_all <- diag(apply(S[1:(m-1), ,], c(2), sum))
   Mt_M <- matrix(apply(apply(M[1:(m-1),,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
   quad_term <- S_all + Mt_M
-  Lconst <- norm(Omega %*% quad_term, type = "F")
+  Lconst <- norm(Omega, type = "2") * norm(quad_term, type = "2")
   print(paste0("Lconst value: ", Lconst))
   step <- 1 / Lconst
   
@@ -1979,7 +1979,7 @@ vi2_optim2_A <- function(A_init = NULL, Sigma, M, S, lambda, W, tol = 1e-7, max.
   S_all <- diag(apply(S[1:(m-1), ,], c(2), sum))
   Mt_M <- matrix(apply(apply(M[1:(m-1),,],1,function(x) {return (x %*% t(x))}), 1, sum), J, J)
   quad_term <- S_all + Mt_M
-  Lconst <- norm(Omega %*% quad_term, type = "F")
+  Lconst <- norm(Omega, type = "2") * norm(quad_term, type = "2")
   if (verbose) {print(paste0("Lconst value: ", Lconst))}
   step <- 1 / Lconst
   

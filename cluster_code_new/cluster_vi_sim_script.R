@@ -40,9 +40,9 @@ sparsity_level <- sim_settings_small_df$sparsity_level[sim_setting_idx]
 p <- sim_settings_small_df$p[sim_setting_idx]
 
 #LOCAL TESTING
-n <- 100
-J <- 4
-m <- 3
+# n <- 100
+# J <- 4
+# m <- 3
 
 #set parameter values according to sim setting index above
 A_lower_val <- sim_settings_small_df$A_lower[sim_setting_idx]
@@ -188,7 +188,7 @@ for (i in 1:nsim) {
     Mt_M1 <- Mt_M1 + vi_est_nopen$M[t,,] %*% t(vi_est_nopen$M[t+1,,])
   }
   A_grad <- -Omega %*% (t(Mt_M1) - A_mom %*% quad_term)
-  Lconst <- norm(Omega %*% quad_term, type = "F")
+  Lconst <- norm(Omega, type = "2") * norm(quad_term, type = "2")
   lambda_max <- max(abs(A_mom - (1/Lconst)*A_grad))*Lconst #this lambda guarantees 0 selected edges
   
   #set up lambda grid
