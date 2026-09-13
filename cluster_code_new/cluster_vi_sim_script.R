@@ -8,9 +8,9 @@ library(here)
 
 
 #import functions
-source("scrnaseq_project_functions.R")
-source("cluster_code_new/sim_helper_functions.R")
-Rcpp::sourceCpp("scrnaseq_project_cpp_functions.cpp")
+source(here("scrnaseq_project_functions.R"))
+source(here("cluster_code_new/sim_helper_functions.R"))
+Rcpp::sourceCpp(here("scrnaseq_project_cpp_functions.cpp"))
 
 #GET ARGUMENT FROM BATCH FILE TO GET ITERATION AND SETTING
 task_num <- as.numeric(commandArgs(trailingOnly=TRUE)[1])
@@ -22,7 +22,7 @@ iteration <- ifelse(is.na(task_num), 2, (task_num - 1) %% 40 + 1)
 
 #SET UP SETTINGS FOR SIMULATION
 #load sim settings
-sim_settings_small_df <- readRDS("cluster_code_new/sim_settings_small_df.rds")
+sim_settings_small_df <- readRDS(here("cluster_code_new/sim_settings_small_df.rds"))
 
 #CHANGE THIS FOR DIFFERENT SIM SETTINGS 
 #sim_setting_idx <- as.numeric(str_extract(commandArgs(trailingOnly=TRUE)[2], "[0-9]+"))
