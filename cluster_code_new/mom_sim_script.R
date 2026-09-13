@@ -123,14 +123,16 @@ for (i in 1:nsim) {
   sim_A_results["mom_nopen", , ,i] <- mom_nopen_est$A
   
   #fit penalized MoM estimator
-  #get vector of lambdas that guarantee 0 selected edges for each sub-problem
-  lambda_max <- 2 * apply(mom_nopen_est$P %*% t(mom_nopen_est$Sigma_Z), 1, function(x) {max(abs(x))}) 
-  # create matrix of lambda_grids for each subproblem so that the j-th column has lambda grid for j-th subproblem
-  lambda_grid_mat <- sapply(lambda_max, function (x) {exp(seq(log(x), log(x * lambda_min_ratio), length.out = lambda_N))})
-  # compute weighting matrix
+  # compute weighting matrix (needed below to get lambda_max that accounts for it)
   sd_z <- sqrt(diag(mom_nopen_est$Sigma_Z))
   W <- outer(1 / sd_z, sd_z)
-  sim_full_A_selection_results[[i]] <- mom_pen_result <- mom_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = O, 
+  #get vector of lambdas that guarantee 0 selected edges for each sub-problem
+  #(divide by W since the penalty applied to row k, column j is lambda * W[k,j])
+  mom_grad <- mom_nopen_est$P %*% t(mom_nopen_est$Sigma_Z)
+  lambda_max <- 2 * apply(abs(mom_grad) / W, 1, max)
+  # create matrix of lambda_grids for each subproblem so that the j-th column has lambda grid for j-th subproblem
+  lambda_grid_mat <- sapply(lambda_max, function (x) {exp(seq(log(x), log(x * lambda_min_ratio), length.out = lambda_N))})
+  sim_full_A_selection_results[[i]] <- mom_pen_result <- mom_pen_estimator_selection(Y = temp_data$Y, X = temp_data$X, O = O,
                                                 A_init = mom_nopen_est$A, Sigma_Z_est = mom_nopen_est$Sigma_Z, P_est = mom_nopen_est$P, W_est = W,
                                                 lambda_grid = lambda_grid_mat, covariates = TRUE)
   
