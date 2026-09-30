@@ -7,8 +7,8 @@ library(Matrix)
 
 #create vectors for all parameters setting values
 n <- c(100, 250, 500)
-J <- c(10, 25, 50)
-m <- 5
+J <- c(25, 50)
+m <- 30
 p <- 5
 A_lower <- c(0.25, 0.5)
 A_upper <- c(0.5, 0.75)
@@ -26,7 +26,7 @@ total_settings <- nrow(settings_df)
 
 # use only once, save settings_df to reference in simulation runs to set up parameters for the simulation run
 # assuming root directory is "timecourse-scRNAseq"
-# saveRDS(settings_df, "cluster_code_new/sim_settings_df.rds")
+saveRDS(settings_df, "cluster_code_new/sim_settings_df.rds")
 
 #set up parameters for each setting
 sim_settings <- vector(mode = "list")
