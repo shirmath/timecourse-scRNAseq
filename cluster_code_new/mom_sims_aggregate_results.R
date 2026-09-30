@@ -31,14 +31,17 @@ if (reaggregate) {
 
   setting_support_list <- vector(mode = "list", length = total_settings)
 
+  #settings are labelled Setting_01, ..., Setting_48 and iteration-files sim_A_01.RDS, ..., sim_A_20.RDS
+  #(process_mom_setting() handles the zero-padding; the setting and file columns are stored as integers)
   for (s in 1:total_settings) {
+    setting_label <- paste0("Setting_", sprintf("%02d", s))
     res <- process_mom_setting(s, settings_df, results_dir = here("cluster_code_new/mom_sim_results"))
     if (is.null(res)) {
-      message(paste0("Skipping Setting_", s, ": no results found in mom_sim_results/."))
+      message(paste0("Skipping ", setting_label, ": no results found in mom_sim_results/."))
       next
     }
     if (res$n_files < n_iter_files_expected) {
-      message(paste0("Setting_", s, " has only ", res$n_files, " of ", n_iter_files_expected,
+      message(paste0(setting_label, " has only ", res$n_files, " of ", n_iter_files_expected,
                      " expected iteration-files."))
     }
     #check each iteration-file contains the expected number of simulation runs for every est_method
@@ -47,8 +50,9 @@ if (reaggregate) {
       count(est_method, file, name = "n_runs")
     short_files <- runs_per_file %>% filter(n_runs < n_runs_per_file_expected)
     if (nrow(short_files) > 0) {
-      message(paste0("Setting_", s, " has iteration-files with fewer than ", n_runs_per_file_expected,
-                     " simulation runs: file(s) ", paste(sort(unique(short_files$file)), collapse = ", ")))
+      message(paste0(setting_label, " has iteration-files with fewer than ", n_runs_per_file_expected,
+                     " simulation runs: file(s) ",
+                     paste(sprintf("%02d", sort(unique(short_files$file))), collapse = ", ")))
     }
     setting_support_list[[s]] <- res$A_support_df %>% mutate(setting = s)
   }

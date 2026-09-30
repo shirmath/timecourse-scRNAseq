@@ -83,12 +83,17 @@ regenerate_A_Sigma <- function(J, sparsity_level, A_lower, A_upper, Sigma_lower,
 # across the iteration-files within a setting, not just across settings), reads the saved estimates,
 # and returns long-format data frames with true values and support-recovery metrics attached.
 # Returns NULL if the setting's results directory doesn't exist or has no iteration files.
+# Setting directories and iteration-file numbers may be zero-padded (Setting_01, sim_A_01.RDS, ... as
+# currently written by mom_sim_script.R) or unpadded (Setting_1, sim_A_1.RDS, ... from older runs);
+# both are handled, with the zero-padded directory preferred if both exist.
 process_mom_setting <- function(setting_idx, settings_df, results_dir) {
 
-  setting_path <- file.path(results_dir, paste0("Setting_", setting_idx))
-  if (!dir.exists(setting_path)) {
+  setting_path_candidates <- file.path(results_dir, paste0("Setting_", c(sprintf("%02d", setting_idx), setting_idx)))
+  setting_path_candidates <- setting_path_candidates[dir.exists(setting_path_candidates)]
+  if (length(setting_path_candidates) == 0) {
     return(NULL)
   }
+  setting_path <- setting_path_candidates[1]
 
   setting_row <- settings_df[setting_idx, ]
   p <- setting_row$p
@@ -96,8 +101,12 @@ process_mom_setting <- function(setting_idx, settings_df, results_dir) {
 
   beta <- regenerate_beta(p, J)
 
-  iter_files <- sort(as.integer(gsub(".*sim_A_(\\d+)\\.RDS$", "\\1",
-                                      list.files(setting_path, pattern = "^sim_A_\\d+\\.RDS$"))))
+  # keep the iteration labels exactly as they appear in the file names (e.g. "01") for reading files,
+  # and use their integer value (e.g. 1) as the iteration number for seeding/labelling
+  iter_labels <- gsub("^sim_A_(\\d+)\\.RDS$", "\\1",
+                      list.files(setting_path, pattern = "^sim_A_\\d+\\.RDS$"))
+  iter_labels <- iter_labels[order(as.integer(iter_labels))]
+  iter_files <- as.integer(iter_labels)
   if (length(iter_files) == 0) {
     return(NULL)
   }
@@ -118,9 +127,10 @@ process_mom_setting <- function(setting_idx, settings_df, results_dir) {
     Sigma_true <- truth$Sigma
     A_true_supp <- which(A_true != 0)
 
-    sim_A <- readRDS(file.path(setting_path, paste0("sim_A_", file_idx, ".RDS")))
-    sim_beta <- readRDS(file.path(setting_path, paste0("sim_beta_", file_idx, ".RDS")))
-    sim_Sigma <- readRDS(file.path(setting_path, paste0("sim_Sigma_", file_idx, ".RDS")))
+    iter_label <- iter_labels[k]
+    sim_A <- readRDS(file.path(setting_path, paste0("sim_A_", iter_label, ".RDS")))
+    sim_beta <- readRDS(file.path(setting_path, paste0("sim_beta_", iter_label, ".RDS")))
+    sim_Sigma <- readRDS(file.path(setting_path, paste0("sim_Sigma_", iter_label, ".RDS")))
 
     # A results: est_method x row x column x iter
     A_df <- as.data.frame.table(sim_A, responseName = "value")
