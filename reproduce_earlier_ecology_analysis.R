@@ -18,7 +18,9 @@ library(intergraph)
 library(here)
 
 # ---- 2. Estimator functions ---------------------------------------------------
-source("scrnaseq_project_functions.R")
+# version of the functions at commit ce07651 (the version the earlier analysis
+# was run with); the cpp functions are unchanged since that commit
+source("scrnaseq_project_functions_ce07651.R")
 sourceCpp("scrnaseq_project_cpp_functions.cpp")
 
 # ---- 3. Load data ---------------------------------------------------------------
@@ -67,7 +69,7 @@ for (i in 1:nrow(order_year_aggregate_project16)) {
   temp_group <- paste0(order_year_aggregate_project16$Group[i])
   temp_site  <- paste0(order_year_aggregate_project16$site_id[i])
   count      <- order_year_aggregate_project16$abundance[i]
-
+  
   project16_data_array[temp_year, temp_group, temp_site] <- count
 }
 
@@ -101,9 +103,9 @@ project16_covariate_array <- array(
 for (i in 1:nrow(project16_siteyearlevel)) {
   time <- paste0(project16_siteyearlevel$year[i])
   samp <- paste0(project16_siteyearlevel$site_id[i])
-
+  
   cov_values <- unlist(project16_siteyearlevel[i, full_covariate_names])
-
+  
   project16_covariate_array[time, , samp] <- cov_values
 }
 
@@ -121,7 +123,7 @@ project16_data_array_imputed <- project16_data_array
 for (i in 1:nrow(project16_siteyearlevel)) {
   temp_year <- project16_siteyearlevel$year_wMissing[i]
   temp_site <- project16_siteyearlevel$site_id_wMissing[i]
-
+  
   # if either year or site is NA, the site/year combination was not sampled
   # at all -- leave every group's count as missing
   if (is.na(temp_year) | is.na(temp_site)) {
@@ -156,17 +158,13 @@ project16_mom_cov_exc_est <- mom_estimator_cov(
 # ---- 10. Penalized MoM fit: weighted l1 penalty, lambda selected by BIC -----
 # Weights w_jk = sd(Z_k) / sd(Z_j)
 sd_z <- sqrt(diag(project16_mom_cov_exc_est$Sigma_Z))
-W <- outer(1 / sd_z, sd_z)
+W    <- outer(1 / sd_z, sd_z)
 
-#get vector of lambdas that guarantee 0 selected edges for each sub-problem
-#(divide by W since the penalty applied to row k, column j is lambda * W[k,j])
-mom_grad <- project16_mom_cov_exc_est$P %*% t(project16_mom_cov_exc_est$Sigma_Z)
-lambda_max <- 2 * apply(abs(mom_grad) / W, 1, max)
-# create matrix of lambda_grids for each subproblem so that the j-th column has lambda grid for j-th subproblem
-lambda_N <- 300
-lambda_min_ratio <- 1/lambda_N
-lambda_grid_mat <- sapply(lambda_max, function (x) {exp(seq(log(x), log(x * lambda_min_ratio), length.out = lambda_N))})
-
+# smallest lambda that guarantees 0 selected edges (divide by W since the
+# penalty applied to entry (j,k) is lambda * W[j,k]); one shared grid for all of A
+grad0      <- -2 * project16_mom_cov_exc_est$P %*% t(project16_mom_cov_exc_est$Sigma_Z)
+lambda_max <- max(abs(grad0) / W)
+lambda_cov_grid <- exp(seq(log(lambda_max), log(0.00005 * lambda_max), length.out = 20000))
 
 project16_pen_mom_cov_exc_scaled_est <- mom_pen_estimator_selection(
   Y = project16_data_array_imputed[, -low_count_groups_idx, ],
@@ -175,35 +173,24 @@ project16_pen_mom_cov_exc_scaled_est <- mom_pen_estimator_selection(
   Sigma_Z_est = project16_mom_cov_exc_est$Sigma_Z,
   P_est = project16_mom_cov_exc_est$P,
   W_est = W,
-  lambda_grid_mat = lambda_grid_mat,
+  lambda_grid = lambda_cov_grid,
   covariates = TRUE
 )
 
-# Model selection via the BIC-like criterion using n as ESS
-# (each row of A was fit over its own lambda grid, so BIC is minimized
-# separately per row/sub-problem rather than over one shared grid)
-p16_scaled_bic_results   <- project16_pen_mom_cov_exc_scaled_est$bic_results
-p16_scaled_A_est_results <- project16_pen_mom_cov_exc_scaled_est$A_est_results
+# Model selection via `bic` (uses n*(m-1) as the sample size in the old version)
+p16_scaled_bic_results <- project16_pen_mom_cov_exc_scaled_est$bic_results
+p16_scaled_lambda_idx  <- which.min(p16_scaled_bic_results$bic)
+project16_exc_pen_cov_scaled_A_est <- project16_pen_mom_cov_exc_scaled_est$A_est_results[p16_scaled_lambda_idx, , ]
 
 J <- nrow(project16_mom_cov_exc_est$Sigma_Z)
-project16_exc_pen_cov_scaled_A_est <- matrix(
-  0, J, J,
-  dimnames = list(names(p16_scaled_A_est_results), colnames(p16_scaled_A_est_results[[1]]))
-)
-for (k in 1:J) {
-  print(names(p16_scaled_A_est_results)[k])
-  p16_scaled_lambda_idx_k <- which.min(p16_scaled_bic_results[[k]]$bic)
-  print(p16_scaled_bic_results[[k]]$lambda[p16_scaled_lambda_idx_k])
-  project16_exc_pen_cov_scaled_A_est[k, ] <- p16_scaled_A_est_results[[k]][p16_scaled_lambda_idx_k, ]
-}
 
 # ---- 11. Normalize the estimated transition matrix for visualization -------
-D_scaled <- diag(sqrt(diag(project16_mom_cov_exc_est$Sigma_Z)), J)
+D_scaled <- diag(sd_z, J)
 project16_exc_pen_cov_scaled_A_normalized <- solve(D_scaled) %*% project16_exc_pen_cov_scaled_A_est %*% D_scaled
 colnames(project16_exc_pen_cov_scaled_A_normalized) <- colnames(project16_exc_pen_cov_scaled_A_est)
 rownames(project16_exc_pen_cov_scaled_A_normalized) <- rownames(project16_exc_pen_cov_scaled_A_est)
 
-# ---- 12. Figure 4: estimated network among macroinvertebrate groups --------
+# ---- 12. Estimated network among macroinvertebrate groups -------------------
 # simple heatmap visualization
 pheatmap(
   project16_exc_pen_cov_scaled_A_normalized,
@@ -211,7 +198,6 @@ pheatmap(
   cluster_cols = FALSE,
   main = "Network among groups"
 )
-
 
 #write own code to make bipartite graph with ggnet2
 # Coords for mode "A"
@@ -231,22 +217,22 @@ E(test.net)$size <- abs(E(test.net)$weight)/5
 
 #plot graph
 p <- GGally::ggnet2(test.net, mode=mylayout2, label=T,
-                    size= nodesize/2, 
+                    size= nodesize/2,
                     label.size= 0.8*nodesize,
                     angle = 90,
                     node.color = "black",
                     layout.exp=2,
-                    arrow.size = 6, 
+                    arrow.size = 6,
                     arrow.gap = 0.025,
                     #nudge_x = rep(c(0.05, -0.05),each = J),
                     nudge_y = rep(c(0.05, -0.05),each = J),
                     edge.color = "color",
-                    edge.size = "size") 
+                    edge.size = "size")
 
-# To save this to a file instead of (or in addition to) plotting it, wrap the
-# call above in, e.g.:
-#   png("plots/ecology_network_figure4.png", width = 8, height = 8, units = "in", res = 300)
-#   pheatmap(...)
+p
+
+# To save this to a file (without overwriting the earlier
+# plots/ecology_network_bipartite_graph_visual_horizontal.png), use e.g.:
+#   png("plots/ecology_network_bipartite_graph_reproduced.png", width = 12, height = 9, units = "in", res = 480)
+#   p
 #   dev.off()
-
-
