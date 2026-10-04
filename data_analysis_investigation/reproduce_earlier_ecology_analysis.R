@@ -1,0 +1,249 @@
+# ---- 1. Packages -------------------------------------------------------------
+library(Matrix)
+library(MASS)
+library(Rcpp)
+library(RcppArmadillo)
+library(nloptr)
+library(numDeriv)
+library(PLNmodels)
+library(patchwork)
+library(tidyverse)
+library(data.table)
+library(igraph)
+library(cowplot)
+library(pheatmap)
+library(ggbipart)
+library(ggraph)
+library(intergraph)
+library(here)
+
+# TRUE: project the Sigma_Z moment estimate onto the PSD cone (eigenvalues clipped at 1e-8)
+# FALSE: use the raw moment estimate (may be indefinite)
+project_sigma_z_psd <- TRUE
+psd_tag <- if (project_sigma_z_psd) "psd" else "nopsd"
+
+# ---- 2. Estimator functions ---------------------------------------------------
+# version of the functions at commit ce07651 (the version the earlier analysis
+# was run with); the cpp functions are unchanged since that commit
+source(here("data_analysis_investigation", "scrnaseq_project_functions_ce07651.R"))
+sourceCpp(here("scrnaseq_project_cpp_functions.cpp"))
+
+# ---- 3. Load data ---------------------------------------------------------------
+all_taxa_raw      <- read.csv(here("..", "Data", "TREAM_allTaxa.csv"))
+sitelevel_raw     <- read.csv(here("..", "Data", "TREAM_siteLevel.csv"))
+siteyearlevel_raw <- read.csv(here("..", "Data", "TREAM_siteYearLevel.csv"))
+
+# ---- 4. Subset to project 16 (the 248 Danish freshwater sites, 1992-2020) -----
+project_16 <- sitelevel_raw %>%
+  filter(project_number == 16)
+
+project_16_sites <- unique(project_16$site_id)
+
+all_taxa_project16 <- all_taxa_raw %>%
+  filter(site_id %in% project_16_sites)
+
+# total abundance of each taxonomic group at each site/year combination
+order_year_aggregate_project16 <- all_taxa_project16 %>%
+  group_by(year, Group, site_id) %>%
+  summarise(abundance = sum(abundance)) %>%
+  ungroup()
+
+n_timepoints <- length(unique(order_year_aggregate_project16$year))
+n_groups     <- length(unique(order_year_aggregate_project16$Group))
+n_sites      <- length(unique(order_year_aggregate_project16$site_id))
+
+# total count per group across all sites/years -- used below to drop the 10
+# lowest-count groups (27 groups -> 17)
+species_totals_project16 <- order_year_aggregate_project16 %>%
+  group_by(Group) %>%
+  summarise(total_across_all = sum(abundance))
+
+# ---- 5. Build the raw (year x group x site) abundance array -------------------
+project16_data_array <- array(
+  NA,
+  dim = c(n_timepoints, n_groups, n_sites),
+  dimnames = list(
+    "year"  = sort(unique(order_year_aggregate_project16$year)),
+    "group" = sort(unique(order_year_aggregate_project16$Group)),
+    "site"  = sort(unique(order_year_aggregate_project16$site_id))
+  )
+)
+
+for (i in 1:nrow(order_year_aggregate_project16)) {
+  temp_year  <- paste0(order_year_aggregate_project16$year[i])
+  temp_group <- paste0(order_year_aggregate_project16$Group[i])
+  temp_site  <- paste0(order_year_aggregate_project16$site_id[i])
+  count      <- order_year_aggregate_project16$abundance[i]
+  
+  project16_data_array[temp_year, temp_group, temp_site] <- count
+}
+
+# ---- 6. Covariates ---------------------------------------------------------------
+# four site-level (time-invariant) covariates
+site_covariates <- c("strahler_streamOrder", "accumulation_atPoint", "elevation_atPoint", "slope_mean")
+project16_sitelevel_info <- sitelevel_raw %>%
+  filter(study_id %in% unique(project_16$study_id)) %>%
+  dplyr::select(site_id, all_of(site_covariates))
+
+# joined with the four time-varying (site-year level) covariates
+project16_siteyearlevel <- siteyearlevel_raw %>%
+  filter(study_id %in% unique(project_16$study_id)) %>%
+  left_join(project16_sitelevel_info, by = join_by(site_id == site_id))
+
+full_covariate_names <- c(
+  'ppt_mm_12moPrior', 'tmax_C_12moPrior', 'crop_perc_upstr', 'urban_perc_upstr',
+  site_covariates
+)
+
+project16_covariate_array <- array(
+  NA,
+  dim = c(n_timepoints, length(full_covariate_names), n_sites),
+  dimnames = list(
+    "year"      = unlist(dimnames(project16_data_array)[1]),
+    "covariate" = full_covariate_names,
+    "site"      = unlist(dimnames(project16_data_array)[3])
+  )
+)
+
+for (i in 1:nrow(project16_siteyearlevel)) {
+  time <- paste0(project16_siteyearlevel$year[i])
+  samp <- paste0(project16_siteyearlevel$site_id[i])
+  
+  cov_values <- unlist(project16_siteyearlevel[i, full_covariate_names])
+  
+  project16_covariate_array[time, , samp] <- cov_values
+}
+
+# ---- 7. Distinguish structural zeros (group absent from a site) from --------
+# ----    sampling zeros (group present but not recorded that year) ----------
+# For each site, the set of groups ever observed there (i.e. assumed to
+# actually inhabit that site).
+observed_species_by_site_project16 <- lapply(dimnames(project16_data_array)$site, function(x) {
+  unique(order_year_aggregate_project16[which(order_year_aggregate_project16$site_id == x), ]$Group)
+})
+names(observed_species_by_site_project16) <- dimnames(project16_data_array)$site
+
+project16_data_array_imputed <- project16_data_array
+
+for (i in 1:nrow(project16_siteyearlevel)) {
+  temp_year <- project16_siteyearlevel$year_wMissing[i]
+  temp_site <- project16_siteyearlevel$site_id_wMissing[i]
+  
+  # if either year or site is NA, the site/year combination was not sampled
+  # at all -- leave every group's count as missing
+  if (is.na(temp_year) | is.na(temp_site)) {
+    next
+  } else {
+    # otherwise, for every group known to inhabit this site, impute 0 where
+    # it wasn't recorded this year (sampling zero); groups never observed at
+    # this site are left as NA (structural zero)
+    temp_observed_species <- observed_species_by_site_project16[[paste0(temp_site)]]
+    for (s in temp_observed_species) {
+      project16_data_array_imputed[paste0(temp_year), s, paste0(temp_site)] <-
+        ifelse(
+          is.na(project16_data_array_imputed[paste0(temp_year), s, paste0(temp_site)]),
+          0,
+          project16_data_array_imputed[paste0(temp_year), s, paste0(temp_site)]
+        )
+    }
+  }
+}
+
+# ---- 8. Drop the 10 lowest-count groups (27 groups -> 17) ----
+low_count_groups_idx <- sort(species_totals_project16$total_across_all, index.return = TRUE)$ix[1:10]
+
+# ---- 9. Unpenalized MoM fit (with covariates) on the retained 17 groups -----
+# Used later for penalized fit below and to build the weighted-l1 penalty.
+project16_mom_cov_exc_est <- mom_estimator_cov(
+  Y = project16_data_array_imputed[, -low_count_groups_idx, ],
+  X = project16_covariate_array,
+  O = matrix(0, nrow = n_timepoints, ncol = n_sites),
+  project_sigma_z_psd = project_sigma_z_psd
+)
+
+# ---- 10. Penalized MoM fit: weighted l1 penalty, lambda selected by BIC -----
+# Weights w_jk = sd(Z_k) / sd(Z_j)
+sd_z <- sqrt(diag(project16_mom_cov_exc_est$Sigma_Z))
+W    <- outer(1 / sd_z, sd_z)
+
+# smallest lambda that guarantees 0 selected edges (divide by W since the
+# penalty applied to entry (j,k) is lambda * W[j,k]); one shared grid for all of A
+grad0      <- -2 * project16_mom_cov_exc_est$P %*% t(project16_mom_cov_exc_est$Sigma_Z)
+lambda_max <- max(abs(grad0) / W)
+lambda_cov_grid <- exp(seq(log(lambda_max), log(0.00005 * lambda_max), length.out = 20000))
+
+project16_pen_mom_cov_exc_scaled_est <- mom_pen_estimator_selection(
+  Y = project16_data_array_imputed[, -low_count_groups_idx, ],
+  X = project16_covariate_array,
+  O = matrix(0, nrow = n_timepoints, ncol = n_sites),
+  Sigma_Z_est = project16_mom_cov_exc_est$Sigma_Z,
+  P_est = project16_mom_cov_exc_est$P,
+  W_est = W,
+  lambda_grid = lambda_cov_grid,
+  covariates = TRUE
+)
+
+# Model selection via `bic` (uses n*(m-1) as the sample size in the old version)
+p16_scaled_bic_results <- project16_pen_mom_cov_exc_scaled_est$bic_results
+p16_scaled_lambda_idx  <- which.min(p16_scaled_bic_results$bic)
+project16_exc_pen_cov_scaled_A_est <- project16_pen_mom_cov_exc_scaled_est$A_est_results[p16_scaled_lambda_idx, , ]
+
+J <- nrow(project16_mom_cov_exc_est$Sigma_Z)
+
+# ---- 11. Normalize the estimated transition matrix for visualization -------
+D_scaled <- diag(sd_z, J)
+project16_exc_pen_cov_scaled_A_normalized <- solve(D_scaled) %*% project16_exc_pen_cov_scaled_A_est %*% D_scaled
+colnames(project16_exc_pen_cov_scaled_A_normalized) <- colnames(project16_exc_pen_cov_scaled_A_est)
+rownames(project16_exc_pen_cov_scaled_A_normalized) <- rownames(project16_exc_pen_cov_scaled_A_est)
+
+# ---- 12. Estimated network among macroinvertebrate groups -------------------
+# simple heatmap visualization
+heatmap_plot <- pheatmap(
+  project16_exc_pen_cov_scaled_A_normalized,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  main = "Network among groups"
+)
+
+png(here(sprintf("data_analysis_investigation/old_analysis_%s_projection_result.png", psd_tag)), width = 8, height = 8, units = "in", res = 300)
+grid::grid.newpage()
+grid::grid.draw(heatmap_plot$gtable)
+dev.off()
+
+#write own code to make bipartite graph with ggnet2
+# Coords for mode "A"
+mymat <- project16_exc_pen_cov_scaled_A_normalized
+diag(mymat) <- 0
+nodesize <- 3
+coordP<- cbind(rep(4,dim(mymat)[1]), 10*seq(1, dim(mymat)[1])+2)
+# Coords for mode "P"
+coordA<- cbind(rep(2,dim(mymat)[2]), 10*seq(1, dim(mymat)[2])+2)
+mylayout<- as.matrix(rbind(coordP, coordA))
+mylayout2 <- as.matrix(rbind(coordP[,c(2,1)], coordA[,c(2,1)]))
+
+#make bipartite network  igraph object and add attributes for edge color and weights
+test.net <- graph_from_biadjacency_matrix(mymat, directed = TRUE, mode = "in", weighted = TRUE)
+E(test.net)$color <- ifelse( E(test.net)$weight < 0, "skyblue", "tomato")
+E(test.net)$size <- abs(E(test.net)$weight)/5
+
+#plot graph
+p <- GGally::ggnet2(test.net, mode=mylayout2, label=T,
+                    size= nodesize/2,
+                    label.size= 0.8*nodesize,
+                    angle = 90,
+                    node.color = "black",
+                    layout.exp=2,
+                    arrow.size = 6,
+                    arrow.gap = 0.025,
+                    #nudge_x = rep(c(0.05, -0.05),each = J),
+                    nudge_y = rep(c(0.05, -0.05),each = J),
+                    edge.color = "color",
+                    edge.size = "size")
+
+p
+
+# To save this to a file (without overwriting the earlier
+# plots/ecology_network_bipartite_graph_visual_horizontal.png), use e.g.:
+#   png("data_analysis_investigation/ecology_network_bipartite_graph_reproduced.png", width = 12, height = 9, units = "in", res = 480)
+#   p
+#   dev.off()
