@@ -204,7 +204,7 @@ mom_estimator <- function(Y, penalty = FALSE, lambda = 1) {
 #FUNCTION TO COMPUTE MoM ESTIMATES (with covariates)
 # make sure X has dimension of m x p x n (i.e. make sure X does not already have intercept term in it, only the p covariates)
 #Offset O should have dimension m x n, so each column has all timepoints for that sample
-mom_estimator_cov <- function(Y, X, O, penalty = FALSE, lambda) {
+mom_estimator_cov <- function(Y, X, O, penalty = FALSE, lambda, project_sigma_z_psd = TRUE) {
   #get dimensions of parameters
   n <- dim(Y)[3]
   m <- dim(Y)[1]
@@ -264,8 +264,8 @@ mom_estimator_cov <- function(Y, X, O, penalty = FALSE, lambda) {
     }
   }
   
-  # project Sigma_Z estimate from raw moments on to PSD cone to ensure estimate is indeed PSD
-  Sigma_Z_est <- project_psd(Sigma_Z_est)
+  # optionally project Sigma_Z estimate from raw moments on to PSD cone to ensure estimate is indeed PSD
+  if (project_sigma_z_psd) Sigma_Z_est <- project_psd(Sigma_Z_est)
   
   #remove matrices created for temporary computations in loop
   rm(Y_jk_mat)
