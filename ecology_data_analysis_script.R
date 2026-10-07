@@ -16,15 +16,33 @@ library(ggbipart)
 library(ggraph)
 library(intergraph)
 library(here)
+library(leaps)
+
+# TRUE: project the Sigma_Z moment estimate onto the PSD cone (eigenvalues clipped at 1e-8)
+# FALSE: use the raw moment estimate (may be indefinite)
+project_sigma_z_psd <- FALSE
+psd_tag <- if (project_sigma_z_psd) "psd" else "nopsd"
+
+# keep only groups observed (non-zero abundance) in at least this fraction of
+# the sampled site-year combinations
+min_prevalence <- 0.05
+
+# site-subsample stability selection: refit on `site_fraction` of the sites
+# `number_of_subsamples` times and keep only edges selected in at least
+# `stability_threshold` of the usable subsamples
+number_of_subsamples <- 200
+site_fraction        <- 0.80
+stability_threshold  <- 0.90
+set.seed(1)
 
 # ---- 2. Estimator functions ---------------------------------------------------
-source("scrnaseq_project_functions.R")
-sourceCpp("scrnaseq_project_cpp_functions.cpp")
+source(here("scrnaseq_project_functions.R"))
+sourceCpp(here("scrnaseq_project_cpp_functions.cpp"))
 
 # ---- 3. Load data ---------------------------------------------------------------
-all_taxa_raw      <- read.csv("../Data/TREAM_allTaxa.csv")
-sitelevel_raw     <- read.csv("../Data/TREAM_siteLevel.csv")
-siteyearlevel_raw <- read.csv("../Data/TREAM_siteYearLevel.csv")
+all_taxa_raw      <- read.csv(here("..", "Data", "TREAM_allTaxa.csv"))
+sitelevel_raw     <- read.csv(here("..", "Data", "TREAM_siteLevel.csv"))
+siteyearlevel_raw <- read.csv(here("..", "Data", "TREAM_siteYearLevel.csv"))
 
 # ---- 4. Subset to project 16 (the 248 Danish freshwater sites, 1992-2020) -----
 project_16 <- sitelevel_raw %>%
@@ -45,11 +63,16 @@ n_timepoints <- length(unique(order_year_aggregate_project16$year))
 n_groups     <- length(unique(order_year_aggregate_project16$Group))
 n_sites      <- length(unique(order_year_aggregate_project16$site_id))
 
-# total count per group across all sites/years -- used below to drop the 10
-# lowest-count groups (27 groups -> 17)
-species_totals_project16 <- order_year_aggregate_project16 %>%
+# prevalence of each group: the fraction of sampled site-year combinations in
+# which it has non-zero abundance -- used below to choose which groups to keep
+n_site_years <- order_year_aggregate_project16 %>%
+  distinct(year, site_id) %>%
+  nrow()
+
+group_prevalence <- order_year_aggregate_project16 %>%
   group_by(Group) %>%
-  summarise(total_across_all = sum(abundance))
+  summarise(n_observed = sum(abundance > 0), prevalence = n_observed / n_site_years) %>%
+  arrange(desc(prevalence))
 
 # ---- 5. Build the raw (year x group x site) abundance array -------------------
 project16_data_array <- array(
@@ -142,15 +165,19 @@ for (i in 1:nrow(project16_siteyearlevel)) {
   }
 }
 
-# ---- 8. Drop the 10 lowest-count groups (27 groups -> 17) ----
-low_count_groups_idx <- sort(species_totals_project16$total_across_all, index.return = TRUE)$ix[1:10]
+# ---- 8. Keep groups observed in at least `min_prevalence` of site-years ----
+keep_groups <- group_prevalence$Group[group_prevalence$prevalence >= min_prevalence]
+cat(sprintf("Keeping %d of %d groups with prevalence >= %.2f (%d sampled site-years)\n",
+            length(keep_groups), nrow(group_prevalence), min_prevalence, n_site_years))
+print(as.data.frame(group_prevalence))
 
-# ---- 9. Unpenalized MoM fit (with covariates) on the retained 17 groups -----
+# ---- 9. Unpenalized MoM fit (with covariates) on the retained groups --------
 # Used later for penalized fit below and to build the weighted-l1 penalty.
 project16_mom_cov_exc_est <- mom_estimator_cov(
-  Y = project16_data_array_imputed[, -low_count_groups_idx, ],
+  Y = project16_data_array_imputed[, keep_groups, ],
   X = project16_covariate_array,
-  O = matrix(0, nrow = n_timepoints, ncol = n_sites)
+  O = matrix(0, nrow = n_timepoints, ncol = n_sites),
+  project_sigma_z_psd = project_sigma_z_psd
 )
 
 # ---- 10. Penalized MoM fit: weighted l1 penalty, lambda selected by BIC -----
@@ -163,13 +190,13 @@ W <- outer(1 / sd_z, sd_z)
 mom_grad <- project16_mom_cov_exc_est$P %*% t(project16_mom_cov_exc_est$Sigma_Z)
 lambda_max <- 2 * apply(abs(mom_grad) / W, 1, max)
 # create matrix of lambda_grids for each subproblem so that the j-th column has lambda grid for j-th subproblem
-lambda_N <- 300
+lambda_N <- 20000
 lambda_min_ratio <- 1/lambda_N
 lambda_grid_mat <- sapply(lambda_max, function (x) {exp(seq(log(x), log(x * lambda_min_ratio), length.out = lambda_N))})
 
 
 project16_pen_mom_cov_exc_scaled_est <- mom_pen_estimator_selection(
-  Y = project16_data_array_imputed[, -low_count_groups_idx, ],
+  Y = project16_data_array_imputed[, keep_groups, ],
   X = project16_covariate_array,
   O = matrix(0, nrow = n_timepoints, ncol = n_sites),
   Sigma_Z_est = project16_mom_cov_exc_est$Sigma_Z,
@@ -203,50 +230,143 @@ project16_exc_pen_cov_scaled_A_normalized <- solve(D_scaled) %*% project16_exc_p
 colnames(project16_exc_pen_cov_scaled_A_normalized) <- colnames(project16_exc_pen_cov_scaled_A_est)
 rownames(project16_exc_pen_cov_scaled_A_normalized) <- rownames(project16_exc_pen_cov_scaled_A_est)
 
-# ---- 12. Figure 4: estimated network among macroinvertebrate groups --------
-# simple heatmap visualization
-pheatmap(
-  project16_exc_pen_cov_scaled_A_normalized,
-  cluster_rows = FALSE,
-  cluster_cols = FALSE,
-  main = "Network among groups"
+# ---- 12. Site-subsample stability selection ---------------------------------
+# Edge selection for each row of A by exhaustive best-subset search: for each
+# row j, regsubsets finds the minimum-residual support of every size for
+# P[j, ] ~ Sigma_Z, and the support with the smallest BIC (n_sites as ESS) is kept.
+select_A <- function(S, P, n_sites) {
+  J <- nrow(S)
+  A <- matrix(0, J, J, dimnames = dimnames(S))
+  for (j in seq_len(J)) {
+    target <- P[j, ]
+    best_bic <- n_sites * sum(target^2)
+    # leaps returns garbage with a warning (XHAUST error) when S is numerically
+    # singular, e.g. after PSD projection, so treat any warning as a failure
+    subsets <- withCallingHandlers(
+      summary(regsubsets(S, target, nvmax = J - 1,
+        intercept = FALSE, method = "exhaustive", really.big = TRUE))$which,
+      warning = function(w) stop("regsubsets failed (Sigma_Z ill-conditioned?): ", conditionMessage(w), call. = FALSE)
+    )
+    if (is.null(dim(subsets))) subsets <- matrix(subsets, nrow = 1)
+    if ("(Intercept)" %in% colnames(subsets))
+      subsets <- subsets[, colnames(subsets) != "(Intercept)", drop = FALSE]
+    for (size in seq_len(nrow(subsets) + 1)) {
+      support <- if (size <= nrow(subsets)) which(subsets[size, ]) else seq_len(J)
+      fit <- lm.fit(S[, support, drop = FALSE], target)
+      if (fit$rank < length(support)) next
+      a <- numeric(J)
+      a[support] <- fit$coefficients
+      bic <- n_sites * sum((S %*% a - target)^2) + length(support) * log(n_sites)
+      if (is.finite(bic) && bic < best_bic) {
+        A[j, ] <- a
+        best_bic <- bic
+      }
+    }
+  }
+  A
+}
+
+Y_keep <- project16_data_array_imputed[, keep_groups, ]
+A_exh <- select_A(project16_mom_cov_exc_est$Sigma_Z, project16_mom_cov_exc_est$P, n_sites)
+# project_psd() can drop dimnames, so set them explicitly
+dimnames(A_exh) <- list(keep_groups, keep_groups)
+cat("Full-data exhaustive-BIC cross-edges:", sum(A_exh != 0 & row(A_exh) != col(A_exh)), "\n")
+
+selected_A <- array(NA_real_, c(number_of_subsamples, J, J))
+for (b in seq_len(number_of_subsamples)) {
+  chosen <- sort(sample(seq_len(n_sites), floor(site_fraction * n_sites)))
+  fit <- tryCatch({
+    sub_est <- mom_estimator_cov(
+      Y = Y_keep[, , chosen, drop = FALSE],
+      X = project16_covariate_array[, , chosen, drop = FALSE],
+      O = matrix(0, nrow = n_timepoints, ncol = length(chosen)),
+      project_sigma_z_psd = project_sigma_z_psd
+    )
+    select_A(sub_est$Sigma_Z, sub_est$P, length(chosen))
+  }, error = function(e) NULL)
+  if (!is.null(fit)) selected_A[b, , ] <- fit
+  if (b %% 10 == 0) cat("Subsamples:", b, "/", number_of_subsamples, "\n")
+}
+usable <- which(!is.na(selected_A[, 1, 1]))
+if (!length(usable)) stop("No usable subsamples")
+
+# selection frequency of each entry of A across the usable subsamples
+selection_frequency <- apply(selected_A[usable, , , drop = FALSE] != 0, c(2, 3), mean)
+dimnames(selection_frequency) <- dimnames(A_exh)
+
+stable_A <- A_exh
+stable_A[selection_frequency < stability_threshold] <- 0
+cat("Usable subsamples:", length(usable), "of", number_of_subsamples, "\n")
+cat("Cross-edges meeting stability threshold:", sum(stable_A != 0 & row(stable_A) != col(stable_A)), "\n")
+stable_edges <- stable_A != 0 & row(stable_A) != col(stable_A)
+print(data.frame(
+  predictor   = colnames(stable_A)[col(stable_A)[stable_edges]],
+  target      = rownames(stable_A)[row(stable_A)[stable_edges]],
+  coefficient = stable_A[stable_edges],
+  frequency   = selection_frequency[stable_edges]
+), row.names = FALSE)
+
+# normalized version (for later plotting)
+stable_A_normalized <- solve(D_scaled) %*% stable_A %*% D_scaled
+dimnames(stable_A_normalized) <- dimnames(stable_A)
+
+saveRDS(
+  list(groups = keep_groups, Sigma_Z = project16_mom_cov_exc_est$Sigma_Z,
+       P = project16_mom_cov_exc_est$P, A_exh = A_exh,
+       frequency = selection_frequency, stable_A = stable_A,
+       stable_A_normalized = stable_A_normalized, usable = length(usable)),
+  here("project16_stability_result.rds")
 )
 
+# ---- 13. (plotting code commented out; to be rewritten) ---------------------
+# # ---- 12. Figure 4: estimated network among macroinvertebrate groups --------
+# # simple heatmap visualization
+# heatmap_plot <- pheatmap(
+#   project16_exc_pen_cov_scaled_A_normalized,
+#   cluster_rows = FALSE,
+#   cluster_cols = FALSE,
+#   main = "Network among groups"
+# )
 
-#write own code to make bipartite graph with ggnet2
-# Coords for mode "A"
-mymat <- project16_exc_pen_cov_scaled_A_normalized
-diag(mymat) <- 0
-nodesize <- 3
-coordP<- cbind(rep(4,dim(mymat)[1]), 10*seq(1, dim(mymat)[1])+2)
-# Coords for mode "P"
-coordA<- cbind(rep(2,dim(mymat)[2]), 10*seq(1, dim(mymat)[2])+2)
-mylayout<- as.matrix(rbind(coordP, coordA))
-mylayout2 <- as.matrix(rbind(coordP[,c(2,1)], coordA[,c(2,1)]))
+# png(here(sprintf("data_analysis_investigation/new_analysis_%s_projection_result.png", psd_tag)), width = 8, height = 8, units = "in", res = 300)
+# grid::grid.newpage()
+# grid::grid.draw(heatmap_plot$gtable)
+# dev.off()
 
-#make bipartite network  igraph object and add attributes for edge color and weights
-test.net <- graph_from_biadjacency_matrix(mymat, directed = TRUE, mode = "in", weighted = TRUE)
-E(test.net)$color <- ifelse( E(test.net)$weight < 0, "skyblue", "tomato")
-E(test.net)$size <- abs(E(test.net)$weight)/5
+# #write own code to make bipartite graph with ggnet2
+# # Coords for mode "A"
+# mymat <- project16_exc_pen_cov_scaled_A_normalized
+# diag(mymat) <- 0
+# nodesize <- 3
+# coordP<- cbind(rep(4,dim(mymat)[1]), 10*seq(1, dim(mymat)[1])+2)
+# # Coords for mode "P"
+# coordA<- cbind(rep(2,dim(mymat)[2]), 10*seq(1, dim(mymat)[2])+2)
+# mylayout<- as.matrix(rbind(coordP, coordA))
+# mylayout2 <- as.matrix(rbind(coordP[,c(2,1)], coordA[,c(2,1)]))
 
-#plot graph
-p <- GGally::ggnet2(test.net, mode=mylayout2, label=T,
-                    size= nodesize/2, 
-                    label.size= 0.8*nodesize,
-                    angle = 90,
-                    node.color = "black",
-                    layout.exp=2,
-                    arrow.size = 6, 
-                    arrow.gap = 0.025,
-                    #nudge_x = rep(c(0.05, -0.05),each = J),
-                    nudge_y = rep(c(0.05, -0.05),each = J),
-                    edge.color = "color",
-                    edge.size = "size") 
+# #make bipartite network  igraph object and add attributes for edge color and weights
+# test.net <- graph_from_biadjacency_matrix(mymat, directed = TRUE, mode = "in", weighted = TRUE)
+# E(test.net)$color <- ifelse( E(test.net)$weight < 0, "skyblue", "tomato")
+# E(test.net)$size <- abs(E(test.net)$weight)/5
 
-# To save this to a file instead of (or in addition to) plotting it, wrap the
-# call above in, e.g.:
-#   png("plots/ecology_network_figure4.png", width = 8, height = 8, units = "in", res = 300)
-#   pheatmap(...)
-#   dev.off()
+# #plot graph
+# p <- GGally::ggnet2(test.net, mode=mylayout2, label=T,
+#                     size= nodesize/2, 
+#                     label.size= 0.8*nodesize,
+#                     angle = 90,
+#                     node.color = "black",
+#                     layout.exp=2,
+#                     arrow.size = 6, 
+#                     arrow.gap = 0.025,
+#                     #nudge_x = rep(c(0.05, -0.05),each = J),
+#                     nudge_y = rep(c(0.05, -0.05),each = J),
+#                     edge.color = "color",
+#                     edge.size = "size") 
+
+# # To save this to a file instead of (or in addition to) plotting it, wrap the
+# # call above in, e.g.:
+# #   png("data_analysis_investigation/ecology_network_figure4.png", width = 8, height = 8, units = "in", res = 300)
+# #   pheatmap(...)
+# #   dev.off()
 
 
